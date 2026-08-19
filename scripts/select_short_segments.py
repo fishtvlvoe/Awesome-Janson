@@ -18,6 +18,31 @@ def load_chapters(path: Path | None, source_end: float) -> list[dict]:
 	return [{"id": 1, "source_start": 0.0, "title": "精華片段"}, {"id": 2, "source_start": source_end / 2, "title": "精華片段"}]
 
 
+NATURAL_END_CHARS = set("。！？；.!?;:")
+
+
+def extend_to_natural_end(chapter_cues: list[dict], start: float, end: float, maximum: float) -> float:
+	"""片段落在逗號／冒號時，延伸到下一個完整語意句，避免成片突然斷尾。"""
+	ordered = sorted(chapter_cues, key=lambda cue: float(cue.get("source_start", 0.0)))
+	last_index = -1
+	for index, cue in enumerate(ordered):
+		if float(cue.get("source_start", 0.0)) < end - 0.001:
+			last_index = index
+	if last_index < 0:
+		return end
+	while last_index < len(ordered) - 1:
+		tail = clean_text(ordered[last_index].get("zh"))
+		if tail and tail[-1] in NATURAL_END_CHARS:
+			break
+		next_cue = ordered[last_index + 1]
+		next_end = float(next_cue.get("source_end", end))
+		if next_end - start > maximum:
+			break
+		end = max(end, next_end)
+		last_index += 1
+	return end
+
+
 def score_window(cues: list[dict], start: float, end: float) -> tuple[float, list[dict]]:
 	inside = [
 		cue
@@ -58,6 +83,7 @@ def build_candidates(edit: dict, chapters: list[dict], minimum: float, maximum: 
 				end = min(chapter_end, start + minimum)
 			if end - start > maximum:
 				end = start + maximum
+			end = extend_to_natural_end(chapter_cues, start, end, maximum)
 			if end - start < minimum:
 				continue
 			score, inside = score_window(cues, start, end)

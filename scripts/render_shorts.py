@@ -69,12 +69,36 @@ def wrap_short_en(text: str, max_chars: int = 42) -> list[str]:
 
 SHORT_MAX_CUE_UNITS = 28
 SHORT_MAX_CUE_SECONDS = 5.4
+SHORT_CAPTION_WIDTH = 940
+SHORT_CAPTION_FONT_SIZE = 76
+SHORT_CAPTION_MIN_FONT_SIZE = 54
 SHORT_TERMINAL_CHARS = set("。！？；：.!?;:")
+SHORT_BREAK_CHARS = SHORT_TERMINAL_CHARS | set("，、,.:")
 
 
 def _short_units(text: str) -> int:
 	text = clean_text(text)
-	return max(1, math.ceil(visual_width(text, 76) / 76)) if text else 0
+	return max(1, math.ceil(visual_width(text, SHORT_CAPTION_FONT_SIZE) / SHORT_CAPTION_FONT_SIZE)) if text else 0
+
+
+def fit_short_caption_lines(text: str) -> tuple[list[str], int]:
+	"""優先單行縮小；真的要換行時，只在標點後切。"""
+	text = clean_text(text)
+	if not text:
+		return [""], SHORT_CAPTION_FONT_SIZE
+	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_MIN_FONT_SIZE - 1, -2):
+		if visual_width(text, font_size) <= SHORT_CAPTION_WIDTH:
+			return [text], font_size
+	breaks = [index + 1 for index, char in enumerate(text) if char in SHORT_BREAK_CHARS]
+	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_MIN_FONT_SIZE - 1, -2):
+		for split_at in sorted(breaks, key=lambda value: abs(value - len(text) / 2)):
+			left, right = text[:split_at].strip(), text[split_at:].strip()
+			if left and right and visual_width(left, font_size) <= SHORT_CAPTION_WIDTH and visual_width(right, font_size) <= SHORT_CAPTION_WIDTH:
+				return [left, right], font_size
+	# 沒有合適標點時不硬切中文；縮到能完整顯示的一行。
+	width = max(visual_width(text, SHORT_CAPTION_MIN_FONT_SIZE), 1.0)
+	font_size = max(36, min(SHORT_CAPTION_FONT_SIZE, int(SHORT_CAPTION_MIN_FONT_SIZE * SHORT_CAPTION_WIDTH / width)))
+	return [text], font_size
 
 
 def _punctuation_only(text: str) -> bool:
@@ -232,8 +256,8 @@ def write_ass(
 		"",
 		"[V4+ Styles]",
 		"Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-		f"Style: Caption,{font_name},76,&H00FFFFFF,&H00FFFFFF,{profile['outline']},{profile['back']},-1,0,0,0,100,100,0,0,3,5,3,2,42,42,260,1",
-		f"Style: Emph,{font_name},96,&H00FFFFFF,{profile['accent']},{profile['outline']},{profile['back']},-1,0,0,0,100,100,0,0,3,6,4,2,34,34,270,1",
+		f"Style: Caption,{font_name},76,&H00FFFFFF,&H00FFFFFF,{profile['outline']},{profile['back']},-1,0,0,0,100,100,0,0,1,5,3,2,42,42,260,1",
+		f"Style: Emph,{font_name},76,&H00FFFFFF,{profile['accent']},{profile['outline']},{profile['back']},-1,0,0,0,100,100,0,0,1,5,3,2,34,34,270,1",
 		f"Style: Title,{font_name},68,{profile['accent']},&H00FFFFFF,{profile['outline']},{profile['back']},-1,0,0,0,100,100,2,0,3,4,3,8,48,48,120,1",
 		f"Style: CTA,{font_name},58,&H00FFFFFF,&H00FFFFFF,{profile['outline']},{profile['back']},-1,0,0,0,100,100,0,0,3,5,3,8,48,48,360,1",
 		"",
@@ -255,18 +279,12 @@ def write_ass(
 		)
 	for index, caption in enumerate(captions):
 		zh_raw = clean_text(caption["zh"])
-		# 短句用 96 級強調，長句改用 76 級並自動換成最多兩行，避免直式畫面被裁切。
+		# 字幕維持同一套基準大小；只有太長時縮小，換行只發生在標點之後。
 		style = "Emph" if index == 0 or _short_units(zh_raw) <= 14 else "Caption"
-		font_size = 96 if style == "Emph" else 76
-		zh_lines = wrap_short_zh(zh_raw, font_size)
-		if len(zh_lines) > 2:
-			style = "Caption"
-			font_size = 76
-			zh_lines = wrap_short_zh(zh_raw, font_size)
+		zh_lines, font_size = fit_short_caption_lines(zh_raw)
 		zh = r"\N".join(escape_ass(line) for line in zh_lines[:2])
 		en = escape_ass(caption.get("en", ""))
-		# 從 88% 放大到 100%，讓每個新 cue 都有輕微進場節奏，而不是靜止文字。
-		text = f"{{\\fscx88\\fscy88\\t(0,180,\\fscx100\\fscy100)}}{zh}"
+		text = f"{{\\fs{font_size}\\fad(60,60)}}{zh}"
 		if en:
 			text += f"\\N{{\\fs38\\c&H00D9D9D9&}}{en}"
 		lines.append(
@@ -330,11 +348,18 @@ def render_segment(
 			f"enable='between(t,{start_time:.3f},{end_time:.3f})'[{out_label}]"
 		)
 		last_video = out_label
-	# 動畫先蓋在原片上，字幕最後疊回來，避免 B-roll／卡片把字遮掉。
-	filters.append(f"[{last_video}]subtitles=filename='{ass_file}':fontsdir='{fonts_dir_value}'[v]")
+	# 動畫先蓋在原片上，字幕最後疊回來，避免 B-roll／卡片把字遮掉；尾端再淡出。
+	output_duration = max(0.1, duration / speed)
+	filters.append(
+		f"[{last_video}]subtitles=filename='{ass_file}':fontsdir='{fonts_dir_value}',"
+		f"fade=t=out:st={max(0.0, output_duration - 0.45):.3f}:d=0.45[v]"
+	)
 
 	map_audio = "0:a:0?"
-	audio_args: list[str] = ["-af", atempo_filter(speed)]
+	audio_args: list[str] = [
+		"-af",
+		f"{atempo_filter(speed)},afade=t=out:st={max(0.0, output_duration - 0.55):.3f}:d=0.55",
+	]
 	if bgm or sfx:
 		music_end = max(0.1, duration / speed)
 		mix_labels = []
@@ -359,7 +384,7 @@ def render_segment(
 		filters.append(
 			"".join(mix_labels)
 			+ f"amix=inputs={len(mix_labels)}:duration=first:dropout_transition=2:normalize=0,"
-			"alimiter=limit=0.94[a]"
+			f"alimiter=limit=0.94,afade=t=out:st={max(0.0, music_end - 0.55):.3f}:d=0.55[a]"
 		)
 		map_audio = "[a]"
 		audio_args = []

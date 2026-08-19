@@ -17,4 +17,14 @@
 /Users/fishtv/Development/.skills-ssot/live/animation-skill-install-manifest.json
 ```
 
+## Provider 分層
+
+- **核心**：FFmpeg、faster-whisper、既有語意 JSON、local B-roll、talking-head 動畫。
+- **素材 optional**：Pexels／Pixabay 等搜尋 API；需自行確認授權與流量限制。
+- **圖片 optional**：OpenAI Images、Gemini／Imagen、FLUX、Stable Image、ComfyUI。
+- **圖生影片 optional**：Runway、Veo、Kling、Luma、Pika 或本地 ComfyUI 工作流。
+- **主題成片 optional**：MoneyPrinterTurbo，負責主題／腳本 → 旁白、素材與成片。
+
+這些 provider 不是剪神主要功能；沒有設定 API 或模型時，一律回退本地 FFmpeg／PIL／Remotion 路線。完整狀態與設定約定見 `../docs/broll-providers.md`。
+
 本地 adapter 不會自動呼叫 Higgsfield、ElevenLabs、OpenRouter 或其他付費 provider；未設定服務時仍可用 FFmpeg + faster-whisper／既有語意 JSON 完成本地輸出。

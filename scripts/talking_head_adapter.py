@@ -31,7 +31,13 @@ def _clean(value: object) -> str:
 
 def _shorten(value: object, limit: int = 18) -> str:
 	text = _clean(value)
-	return text if len(text) <= limit else text[: limit - 1] + "…"
+	if len(text) <= limit:
+		return text
+	cut = text[: limit - 1].rstrip()
+	# 不把 SEO／BNI／loader 等 ASCII 專有名詞切成半個字。
+	if re.search(r"[A-Za-z0-9]$", cut):
+		cut = re.sub(r"[A-Za-z0-9+./_-]+$", "", cut).rstrip()
+	return cut + "…"
 
 
 def _caption_groups(captions: list[dict], count: int) -> list[list[dict]]:
@@ -46,7 +52,7 @@ def _caption_groups(captions: list[dict], count: int) -> list[list[dict]]:
 def _group_items(group: list[dict], limit: int = 3) -> list[str]:
 	items: list[str] = []
 	for caption in group:
-		text = _shorten(caption.get("zh"), 16)
+		text = _shorten(caption.get("zh"), 20)
 		if text and text not in items:
 			items.append(text)
 		if len(items) >= limit:
@@ -75,10 +81,11 @@ def build_events(captions: list[dict], duration: float, include_broll: bool = Tr
 	step = (last_start - first_start) / max(event_count - 1, 1)
 	groups = _caption_groups(usable, event_count)
 	events: list[dict] = []
-	scene_names = ["network", "funnel", "pipeline", "loop", "network", "funnel"]
+	scene_names = ["network", "funnel", "pipeline", "loop", "funnel", "loop"]
+	broll_indexes = {0, 2, 4, 5}
 	for index, (start_group, group) in enumerate(zip(range(event_count), groups)):
 		start = first_start + step * index
-		kind_broll = include_broll and index % 2 == 0
+		kind_broll = include_broll and index in broll_indexes
 		if kind_broll:
 			items = _group_items(group, limit=2)
 			events.append(
@@ -93,7 +100,7 @@ def build_events(captions: list[dict], duration: float, include_broll: bool = Tr
 					},
 				}
 			)
-		elif index % 3 == 1:
+		elif index == 1:
 			items = _group_items(group, limit=3)
 			events.append(
 				{

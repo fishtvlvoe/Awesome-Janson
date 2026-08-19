@@ -15,9 +15,10 @@ from talking_head_adapter import anim_lib
 
 
 W, H = 1080, 1920
-DARK = (10, 20, 22)
-PANEL = (15, 31, 36)
-PANEL_2 = (21, 43, 48)
+# 與 render_shorts editorial 背景 0x16181D 對齊，避免 B-roll 跳出另一套底色。
+DARK = (22, 24, 29)
+PANEL = (30, 38, 45)
+PANEL_2 = (38, 48, 55)
 TEAL = (20, 200, 190)
 GOLD = (255, 214, 0)
 WHITE = (255, 255, 255)
@@ -67,6 +68,14 @@ def _wrap(text: str, font, max_width: int, max_lines: int = 2) -> list[str]:
 	return [lines[0], "".join(lines[1:])[:18] + ("…" if len("".join(lines[1:])) > 18 else "")]
 
 
+def _draw_lines(draw: ImageDraw.ImageDraw, lines: list[str], center_x: int, top: int, font, fill, line_gap: int = 12) -> int:
+	line_height = max(42, font.getbbox("國")[3] - font.getbbox("國")[1])
+	for index, line in enumerate(lines):
+		width = draw.textlength(line, font=font)
+		draw.text((center_x - width / 2, top + index * (line_height + line_gap)), line, font=font, fill=fill)
+	return top + len(lines) * (line_height + line_gap)
+
+
 def _text_block(
 	draw: ImageDraw.ImageDraw,
 	text: str,
@@ -77,12 +86,24 @@ def _text_block(
 	max_width: int,
 	line_gap: int = 12,
 ) -> int:
-	lines = _wrap(text, font, max_width)
-	line_height = max(42, font.getbbox("國")[3] - font.getbbox("國")[1])
-	for index, line in enumerate(lines):
-		width = draw.textlength(line, font=font)
-		draw.text((center_x - width / 2, top + index * (line_height + line_gap)), line, font=font, fill=fill)
-	return top + len(lines) * (line_height + line_gap)
+	return _draw_lines(draw, _wrap(text, font, max_width), center_x, top, font, fill, line_gap)
+
+
+def _fit_headline(text: str, max_width: int = 780) -> tuple[list[str], object]:
+	"""標題先縮成一行；只有標點可切時才使用兩行。"""
+	dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+	for size in range(64, 43, -2):
+		font = _font("H", size)
+		if dummy.textlength(text, font=font) <= max_width:
+			return [text], font
+	breaks = [index + 1 for index, char in enumerate(text) if char in "，。！？；：、,.!?;:"]
+	for size in range(60, 43, -2):
+		font = _font("H", size)
+		for split_at in sorted(breaks, key=lambda value: abs(value - len(text) / 2)):
+			left, right = text[:split_at].strip(), text[split_at:].strip()
+			if left and right and dummy.textlength(left, font=font) <= max_width and dummy.textlength(right, font=font) <= max_width:
+				return [left, right], font
+	return [text], _font("H", 42)
 
 
 def _arrow(draw: ImageDraw.ImageDraw, start: tuple[int, int], end: tuple[int, int], color, width: int = 8) -> None:
@@ -194,10 +215,11 @@ def render(lay: str, kind: str, params: dict, dur: float, outdir: Path, fps: int
 		# 兩個緩慢移動的光暈，讓畫面不會像一張死圖。
 		glow_x = int(160 + 760 * ((local / max(dur, 1.0)) % 1.0))
 		draw.ellipse([glow_x - 330, 250, glow_x + 330, 910], fill=_alpha((18, 82, 78), opacity * 0.15))
-		draw.rounded_rectangle([74, 230, 1006, 1375], radius=46, fill=_alpha(PANEL, opacity * 0.96), outline=_alpha(TEAL, opacity * 0.72), width=5)
+		draw.rounded_rectangle([74, 230, 1006, 1375], radius=46, fill=_alpha(PANEL, opacity), outline=_alpha(TEAL, opacity * 0.72), width=5)
 		label_font = _font("B", 28)
 		draw.text((120, 286), "情境示範  ·  B-ROLL", font=label_font, fill=_alpha(TEAL, opacity))
-		_text_block(draw, headline, W // 2, 350, _font("H", 68), _alpha(WHITE, opacity), 780, 10)
+		headline_lines, headline_font = _fit_headline(headline)
+		_draw_lines(draw, headline_lines, W // 2, 350, headline_font, _alpha(WHITE, opacity), 10)
 		scene(draw, _c01(local / max(dur, 1.0)), opacity)
 		if body:
 			_text_block(draw, body, W // 2, 1125, _font("B", 34), _alpha(MUTED, opacity), 760, 8)

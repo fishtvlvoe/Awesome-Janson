@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import apply_review  # noqa: E402
 import render_semantic  # noqa: E402
 import render_shorts  # noqa: E402
+import select_short_segments  # noqa: E402
 import semantic_edit  # noqa: E402
 import talking_head_adapter  # noqa: E402
 from subtitle_layout import split_subtitle_cue, visual_width, wrap_chinese, wrap_english  # noqa: E402
@@ -86,6 +87,14 @@ class SemanticPipelineTests(unittest.TestCase):
 		self.assertIn("Computex", zh)
 		self.assertLessEqual(max(visual_width(line, 34) for line in zh.split("\\N")), 1080)
 		self.assertLessEqual(max(visual_width(line, 20, english=True) for line in en.split("\\N")), 1080)
+
+	def test_short_selector_extends_comma_ending_to_complete_sentence(self):
+		cues = [
+			{"source_start": 10.0, "source_end": 12.0, "zh": "前面完整。"},
+			{"source_start": 12.0, "source_end": 14.0, "zh": "我們要切出一條，"},
+			{"source_start": 14.0, "source_end": 16.0, "zh": "不一樣的單。"},
+		]
+		self.assertEqual(select_short_segments.extend_to_natural_end(cues, 10.0, 14.0, 75.0), 16.0)
 
 	def test_short_caption_mapping_uses_segment_relative_time(self):
 		captions = render_shorts.build_captions(
@@ -168,7 +177,7 @@ class SemanticPipelineTests(unittest.TestCase):
 			)
 			content = output.read_text(encoding="utf-8")
 			self.assertIn(r"\N", content)
-			self.assertIn(r"\fscx88", content)
+			self.assertIn(r"\fs62", content)
 			self.assertNotIn("English", content)
 
 	def test_talking_head_ass_includes_optional_cta(self):

@@ -84,8 +84,10 @@ description: "【剪神 / Awesome-Janson】全能 AI 影片剪輯 Agent。支援
 | `story-to-handdrawn-video` | 中文故事手繪動畫 | 故事型短片 provider |
 | `LottieFiles motion-design` | 通用 motion design 方法論 | 已安裝至全域 Skill SSOT，並同步保留在 `integrations/motion-design/` |
 | `MoneyPrinterTurbo` | 主題／腳本 → TTS、素材、BGM、成片 | 只作 optional topic-video provider；不取代既有錄影的語意剪輯 |
+| `Pexels`／`Pixabay` | 真實情境 B-roll 素材 | optional；需各自 API／授權，沒有設定時回退 local |
+| AI 生圖／圖生影片 | OpenAI Images、Gemini／Imagen、FLUX、Runway、Veo、Kling、Luma 等 | optional provider 設計；目前不作核心硬依賴 |
 
-短片與長片共用語意 JSON、word-level 時間軸與字幕布局；長片使用 `render_full.py`，短片使用 `render_shorts.py`。
+短片與長片共用語意 JSON、word-level 時間軸與字幕布局；長片使用 `render_full.py`，短片使用 `render_shorts.py`。B-roll／模型 provider 的完整擴充矩陣見 `docs/broll-providers.md`；這些都是 optional，不是剪神核心依賴。
 
 ### MoneyPrinterTurbo 路由規則
 
@@ -115,6 +117,14 @@ python3 scripts/doctor.py
 | **FFmpeg** | `ffmpeg -filters \| grep subtitles` | Mac: `brew install ffmpeg` / Win: `winget install Gyan.FFmpeg` |
 | **Python** | Python 3.10+ & `faster-whisper` | `pip install faster-whisper` |
 | **Node.js** | Node 20+ & Remotion | `npx remotion --version` |
+
+### B-roll Provider 原則
+
+- 有現成錄影時，預設保留原始人聲與剪神本地 B-roll，不自動呼叫外部模型。
+- LLM 只產生受限制的 `scene_plan.json`；素材／圖片／圖生影片 provider 仍須 opt-in。
+- ChatGPT／Codex／Claude Code／Kimi 網頁訂閱通常不能直接代替第三方 API key。
+- API key 不寫入 skill、git 或 log；缺少 key 時必須退回本地路線。
+- Provider 類型、設定名稱與目前完成度見 `docs/broll-providers.md`。
 
 ---
 

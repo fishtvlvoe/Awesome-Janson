@@ -145,7 +145,11 @@ python3 scripts/render_shorts.py semantic_full/semantic_edit.json shorts/short_s
   --cta "追蹤剪神" --render
 ```
 
-短影音片審規則固定在 `prompts/shorts-review.md`：中文市場預設只顯示繁中、字幕先合併碎句、每 6～8 秒有視覺事件、三支短片共用第一版 B-roll／動畫／BGM／音效／CTA 模板但各自帶出不同重點。`--broll local` 是不依賴外部 API 的 Image2-style 情境圖卡 fallback；外部 AI B-roll 與臉部保真服務仍是可選 provider，沒有服務時仍可完成本地短片輸出。
+短影音片審規則固定在 `prompts/shorts-review.md`：中文市場預設只顯示繁中、字幕先合併碎句、每 6～8 秒有視覺事件、三支短片共用第一版 B-roll／動畫／BGM／音效／CTA 模板但各自帶出不同重點。`--broll local` 是不依賴外部 API 的 Image2-style 情境圖卡 fallback；外部 AI B-roll、素材搜尋與臉部保真服務仍是可選 provider，沒有服務時仍可完成本地短片輸出。完整 provider 選項與模型串接方式見 [`docs/broll-providers.md`](docs/broll-providers.md)。
+
+### 🧩 B-roll 與模型擴充（optional providers）
+
+剪神核心不綁任何雲端模型。除了本地圖卡，也可以選擇 Pexels／Pixabay 素材、OpenAI Images、Gemini／Imagen、FLUX、Runway、Veo、Kling、Luma 或本地 ComfyUI；這些 provider 都是可插拔擴充，沒有 API 時會回退到 local。請先讀 [`docs/broll-providers.md`](docs/broll-providers.md) 再決定是否接入。
 
 ### 🧠 主題生成模式（MoneyPrinterTurbo provider）
 

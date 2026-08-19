@@ -40,7 +40,7 @@ def F(w, s):
         _fc[k] = ImageFont.truetype(str(path), int(s)) if path else ImageFont.load_default()
     return _fc[k]
 
-TEAL=(20,200,190); GOLD=(255,214,0); DARK=(10,20,22)
+TEAL=(20,200,190); GOLD=(255,214,0); DARK=(22,24,29)
 GREY=(150,150,145); WHITE=(255,255,255); RED=(226,86,74)
 
 def eoc(t): return 1-(1-t)**3
