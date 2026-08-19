@@ -26,27 +26,38 @@ if str(UPSTREAM_ANIM_DIR) not in sys.path:
 	sys.path.insert(0, str(UPSTREAM_ANIM_DIR))
 
 import anim_lib  # noqa: E402
+from subtitle_layout import ASCII_TOKEN_RE, mixed_text_tokens  # noqa: E402
 
 
 def _clean(value: object) -> str:
 	return " ".join(str(value or "").replace(r"\N", " ").split())
 
 
+def _truncate_ascii_token(token: str) -> str:
+	"""極長 URL／專名只在 token 尾端縮略，不留下 ``https:…`` 這類殘片。"""
+	if len(token) <= MAX_UNBROKEN_ASCII_EVENT_CHARS:
+		return token
+	return token[: MAX_UNBROKEN_ASCII_EVENT_CHARS - 1] + "…"
+
+
 def _shorten(value: object, limit: int = 18) -> str:
 	text = _clean(value)
 	if len(text) <= limit:
 		return text
-	cut = text[: limit - 1].rstrip()
-	# 不把 SEO／BNI／loader 等 ASCII 專有名詞切成半個字。
-	if re.search(r"[A-Za-z0-9]$", cut):
-		without_partial_term = re.sub(r"[A-Za-z0-9+./_-]+$", "", cut).rstrip()
-		# 短 ASCII 專有名詞完整保留；極端長 token 則保留前綴＋省略號，確保圖卡不超出畫布。
-		if not without_partial_term:
-			if len(text) <= MAX_UNBROKEN_ASCII_EVENT_CHARS:
-				return text
-			return text[: MAX_UNBROKEN_ASCII_EVENT_CHARS - 1] + "…"
-		cut = without_partial_term
-	return cut + "…"
+	visible = ""
+	for token in mixed_text_tokens(text):
+		candidate = visible + token
+		if len(candidate) <= limit - 1:
+			visible = candidate
+			continue
+		# URL、email、版本號等 token 要嘛完整顯示、要嘛從安全尾端縮略；不能切到 ``https:``。
+		# 網址比「請到」這類前綴更有資訊量，所以即使前面已有短文字也優先保留網址本身。
+		if ASCII_TOKEN_RE.fullmatch(token) and (
+			not visible.strip() or token.lower().startswith(("https://", "http://", "www."))
+		):
+			return _truncate_ascii_token(token)
+		return (visible.rstrip() + "…") if visible.strip() else _truncate_ascii_token(token)
+	return visible.rstrip() + "…"
 
 
 def _caption_groups(captions: list[dict], count: int) -> list[list[dict]]:

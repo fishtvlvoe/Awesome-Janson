@@ -12,6 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from talking_head_adapter import anim_lib
+from subtitle_layout import mixed_text_tokens
 
 
 W, H = 1080, 1920
@@ -89,21 +90,46 @@ def _text_block(
 	return _draw_lines(draw, _wrap(text, font, max_width), center_x, top, font, fill, line_gap)
 
 
+def _headline_break_positions(text: str) -> list[int]:
+	"""只允許在 ASCII token 外的標點後換行，避免 URL 被切成 ``https:``。"""
+	positions: list[int] = []
+	cursor = 0
+	for token in mixed_text_tokens(text):
+		cursor += len(token)
+		if len(token) == 1 and token in "，。！？；：、,.!?;:":
+			positions.append(cursor)
+	return positions
+
+
+def _truncate_headline(text: str, font, max_width: int, draw: ImageDraw.ImageDraw) -> str:
+	"""無安全換行點的超長標題以尾端省略號縮略，保留完整 token 前綴。"""
+	if draw.textlength(text, font=font) <= max_width:
+		return text
+	suffix = "…"
+	fitted = ""
+	for char in text:
+		if draw.textlength(fitted + char + suffix, font=font) > max_width:
+			break
+		fitted += char
+	return (fitted + suffix) if fitted else suffix
+
+
 def _fit_headline(text: str, max_width: int = 780) -> tuple[list[str], object]:
-	"""標題先縮成一行；只有標點可切時才使用兩行。"""
+	"""標題先縮成一行；只有安全標點可切時才使用兩行。"""
 	dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
 	for size in range(64, 43, -2):
 		font = _font("H", size)
 		if dummy.textlength(text, font=font) <= max_width:
 			return [text], font
-	breaks = [index + 1 for index, char in enumerate(text) if char in "，。！？；：、,.!?;:"]
+	breaks = _headline_break_positions(text)
 	for size in range(60, 43, -2):
 		font = _font("H", size)
 		for split_at in sorted(breaks, key=lambda value: abs(value - len(text) / 2)):
 			left, right = text[:split_at].strip(), text[split_at:].strip()
 			if left and right and dummy.textlength(left, font=font) <= max_width and dummy.textlength(right, font=font) <= max_width:
 				return [left, right], font
-	return [text], _font("H", 42)
+	font = _font("H", 42)
+	return [_truncate_headline(text, font, max_width, dummy)], font
 
 
 def _arrow(draw: ImageDraw.ImageDraw, start: tuple[int, int], end: tuple[int, int], color, width: int = 8) -> None:

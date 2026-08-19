@@ -78,6 +78,19 @@ def visual_width(text: str, font_size: float, english: bool = False) -> float:
 	return sum(_char_width(char, font_size, english=english) for char in text)
 
 
+def _fit_unbroken_token(token: str, max_width: float, font_size: float, english: bool = False) -> str:
+	"""把無法換行的超長 token 安全縮略成可顯示的一行。"""
+	if visual_width(token, font_size, english=english) <= max_width:
+		return token
+	suffix = "…"
+	fitted = ""
+	for char in token:
+		if visual_width(fitted + char + suffix, font_size, english=english) > max_width:
+			break
+		fitted += char
+	return (fitted + suffix) if fitted else suffix
+
+
 def _display_units(text: str, font_size: float) -> int:
 	units = 0
 	for token in mixed_text_tokens(text):
@@ -100,7 +113,13 @@ def wrap_chinese(
 		current = ""
 		# 連續英數、URL 與專有名詞視為一個 token，不能在 Computex、Wi-Fi、https:// 中間斷行。
 		tokens = mixed_text_tokens(source_line)
-		for token in tokens:
+		for raw_token in tokens:
+			# 字幕是不可點擊的顯示層；極長 URL 以省略號安全縮略，原始 cue 內容不變。
+			token = (
+				_fit_unbroken_token(raw_token, max_width, font_size)
+				if ASCII_TOKEN_RE.fullmatch(raw_token)
+				else raw_token
+			)
 			candidate = current + token
 			if current and (
 				visual_width(candidate, font_size) > max_width
@@ -173,7 +192,9 @@ def split_subtitle_cue(cue: dict) -> list[dict]:
 	if parts <= 1:
 		return [normalised]
 	zh_chunks = split_text_parts(zh, parts, english=False)
-	en_chunks = split_text_parts(en, parts, english=True) if en else [""] * parts
+	en_chunks = split_text_parts(en, parts, english=True) if en else []
+	# 單一超長 token 無法再按詞切 cue；不要為湊原先估算的 parts 產生空字幕事件。
+	parts = max(1, min(parts, max(len(zh_chunks), len(en_chunks), 1)))
 	while len(zh_chunks) < parts:
 		zh_chunks.append("")
 	while len(en_chunks) < parts:
@@ -206,7 +227,9 @@ def wrap_english(
 	lines: list[str] = []
 	for source_line in re.split(r"\r?\n", text.strip()):
 		current = ""
-		for token in re.findall(r"\S+\s*", source_line):
+		for raw_token in re.findall(r"\S+\s*", source_line):
+			trailing_space = raw_token[len(raw_token.rstrip()) :]
+			token = _fit_unbroken_token(raw_token.rstrip(), max_width, font_size, english=True) + trailing_space
 			candidate = current + token
 			if current and (
 				visual_width(candidate.rstrip(), font_size, english=True) > max_width

@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import apply_review  # noqa: E402
+import broll_adapter  # noqa: E402
 import render_semantic  # noqa: E402
 import render_shorts  # noqa: E402
 import select_short_segments  # noqa: E402
@@ -113,6 +114,34 @@ class SemanticPipelineTests(unittest.TestCase):
 	def test_shortening_keeps_unbroken_ascii_term(self):
 		self.assertEqual(talking_head_adapter._shorten("PowerTeamSuperLongName", 14), "PowerTeamSuperLongName")
 		self.assertEqual(talking_head_adapter._shorten("這是SEO/BNI/loader", 14), "這是…")
+
+	def test_shortening_never_returns_a_fragmented_url(self):
+		url = "https://example.com/path/to/resource?source=shorts&variant=tw"
+		self.assertTrue(talking_head_adapter._shorten(url, 20).startswith("https://"))
+		self.assertTrue(talking_head_adapter._shorten("請到 " + url, 20).startswith("https://"))
+
+	def test_broll_headline_does_not_split_url_at_punctuation(self):
+		url = "https://example.com/path/to/resource?source=shorts&variant=tw"
+		lines, _ = broll_adapter._fit_headline(url)
+		self.assertEqual(len(lines), 1)
+		self.assertTrue(lines[0].startswith("https://"))
+		self.assertNotEqual(lines[0], "https:…")
+
+	def test_long_url_subtitle_stays_bounded_without_empty_cues(self):
+		url = "https://" + "a" * 100 + ".example.com/path?source=shorts&variant=tw"
+		for text in (url, "請看 " + url + "，了解詳情。"):
+			parts = split_subtitle_cue({"start": 0.0, "end": 5.0, "zh": text, "en": ""})
+			self.assertTrue(all(part["zh"] or part["en"] for part in parts))
+			for part in parts:
+				wrapped = wrap_chinese(part["zh"])
+				self.assertLessEqual(max(visual_width(line, 50) for line in wrapped.split(r"\N")), 1080)
+
+	def test_short_selector_does_not_extend_across_long_silence(self):
+		cues = [
+			{"source_start": 10.0, "source_end": 12.0, "zh": "前半句，"},
+			{"source_start": 22.0, "source_end": 24.0, "zh": "後半句。"},
+		]
+		self.assertEqual(select_short_segments.extend_to_natural_end(cues, 10.0, 12.0, 75.0), 12.0)
 
 	def test_short_caption_keeps_url_as_a_single_protected_token(self):
 		url = "https://example.com/path/to/resource?source=shorts&variant=tw"
