@@ -18,28 +18,47 @@ def load_chapters(path: Path | None, source_end: float) -> list[dict]:
 	return [{"id": 1, "source_start": 0.0, "title": "精華片段"}, {"id": 2, "source_start": source_end / 2, "title": "精華片段"}]
 
 
-NATURAL_END_CHARS = set("。！？；.!?;:")
+NATURAL_END_CHARS = set("。！？；.!?;")
+EPSILON = 0.001
 
 
-def extend_to_natural_end(chapter_cues: list[dict], start: float, end: float, maximum: float) -> float:
-	"""片段落在逗號／冒號時，延伸到下一個完整語意句，避免成片突然斷尾。"""
+def extend_to_natural_end(
+	chapter_cues: list[dict],
+	start: float,
+	end: float,
+	maximum: float,
+	limit_end: float | None = None,
+) -> float:
+	"""只在 cue 邊界收尾；逗號／冒號結尾會延伸到下一個完整句。"""
 	ordered = sorted(chapter_cues, key=lambda cue: float(cue.get("source_start", 0.0)))
-	last_index = -1
-	for index, cue in enumerate(ordered):
-		if float(cue.get("source_start", 0.0)) < end - 0.001:
-			last_index = index
-	if last_index < 0:
+	allowed_end = min(start + maximum, limit_end) if limit_end is not None else start + maximum
+	# 先將選段對齊到完整 cue。無法向前延伸時退回上一個 cue 邊界，不能切在說話中間。
+	current_index = next(
+		(index for index, cue in enumerate(ordered) if float(cue.get("source_start", 0.0)) < end - EPSILON <= float(cue.get("source_end", 0.0)) + EPSILON),
+		None,
+	)
+	if current_index is None:
 		return end
-	while last_index < len(ordered) - 1:
-		tail = clean_text(ordered[last_index].get("zh"))
+	current_end = float(ordered[current_index].get("source_end", end))
+	if current_end > end + EPSILON:
+		if current_end <= allowed_end + EPSILON:
+			end = current_end
+		else:
+			previous_end = max(
+				(float(cue.get("source_end", start)) for cue in ordered[:current_index] if float(cue.get("source_end", start)) <= end + EPSILON),
+				default=start,
+			)
+			return previous_end
+	while current_index < len(ordered) - 1:
+		tail = clean_text(ordered[current_index].get("zh"))
 		if tail and tail[-1] in NATURAL_END_CHARS:
 			break
-		next_cue = ordered[last_index + 1]
+		next_cue = ordered[current_index + 1]
 		next_end = float(next_cue.get("source_end", end))
-		if next_end - start > maximum:
+		if next_end > allowed_end + EPSILON:
 			break
-		end = max(end, next_end)
-		last_index += 1
+		end = next_end
+		current_index += 1
 	return end
 
 
@@ -83,7 +102,7 @@ def build_candidates(edit: dict, chapters: list[dict], minimum: float, maximum: 
 				end = min(chapter_end, start + minimum)
 			if end - start > maximum:
 				end = start + maximum
-			end = extend_to_natural_end(chapter_cues, start, end, maximum)
+			end = extend_to_natural_end(chapter_cues, start, end, maximum, limit_end=chapter_end)
 			if end - start < minimum:
 				continue
 			score, inside = score_window(cues, start, end)

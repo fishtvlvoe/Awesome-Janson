@@ -36,7 +36,11 @@ def _shorten(value: object, limit: int = 18) -> str:
 	cut = text[: limit - 1].rstrip()
 	# 不把 SEO／BNI／loader 等 ASCII 專有名詞切成半個字。
 	if re.search(r"[A-Za-z0-9]$", cut):
-		cut = re.sub(r"[A-Za-z0-9+./_-]+$", "", cut).rstrip()
+		without_partial_term = re.sub(r"[A-Za-z0-9+./_-]+$", "", cut).rstrip()
+		# 單一超長 ASCII 專有名詞寧可原樣交給圖卡縮字，也不能變成只有省略號。
+		if not without_partial_term:
+			return text
+		cut = without_partial_term
 	return cut + "…"
 
 

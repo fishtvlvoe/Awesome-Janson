@@ -96,6 +96,23 @@ class SemanticPipelineTests(unittest.TestCase):
 		]
 		self.assertEqual(select_short_segments.extend_to_natural_end(cues, 10.0, 14.0, 75.0), 16.0)
 
+	def test_short_selector_does_not_stop_mid_cue_or_at_ascii_colon(self):
+		terminal_cue = [{"source_start": 10.0, "source_end": 16.0, "zh": "完整句。"}]
+		self.assertEqual(select_short_segments.extend_to_natural_end(terminal_cue, 10.0, 14.0, 75.0), 16.0)
+		self.assertEqual(
+			select_short_segments.extend_to_natural_end(terminal_cue, 10.0, 14.0, 75.0, limit_end=14.0),
+			10.0,
+		)
+		colon_cues = [
+			{"source_start": 10.0, "source_end": 12.0, "zh": "接下來:"},
+			{"source_start": 12.0, "source_end": 14.0, "zh": "下一段。"},
+		]
+		self.assertEqual(select_short_segments.extend_to_natural_end(colon_cues, 10.0, 12.0, 75.0), 14.0)
+
+	def test_shortening_keeps_unbroken_ascii_term(self):
+		self.assertEqual(talking_head_adapter._shorten("PowerTeamSuperLongName", 14), "PowerTeamSuperLongName")
+		self.assertEqual(talking_head_adapter._shorten("這是SEO/BNI/loader", 14), "這是…")
+
 	def test_short_caption_mapping_uses_segment_relative_time(self):
 		captions = render_shorts.build_captions(
 			{
