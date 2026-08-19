@@ -75,6 +75,7 @@ SHORT_CAPTION_MIN_FONT_SIZE = 42
 TAIL_PAD_SECONDS = 0.65
 SHORT_TERMINAL_CHARS = set("。！？；：.!?;:")
 SHORT_BREAK_CHARS = SHORT_TERMINAL_CHARS | set("，、,.:")
+SHORT_CLOSING_CHARS = set("」』）】〉》〕〗〙〛\"'”’)]}")
 
 
 def _short_units(text: str) -> int:
@@ -83,13 +84,20 @@ def _short_units(text: str) -> int:
 
 
 def _caption_break_positions(text: str) -> list[int]:
-	"""只回傳自然標點後的位置；URL、版本號等 ASCII token 不能成為切點。"""
+	"""只回傳自然標點與其後閉合符號的位置；URL、版本號等 ASCII token 不能成為切點。"""
 	positions: list[int] = []
+	tokens = mixed_text_tokens(text)
 	cursor = 0
-	for token in mixed_text_tokens(text):
+	for index, token in enumerate(tokens):
 		cursor += len(token)
-		if len(token) == 1 and token in SHORT_BREAK_CHARS:
-			positions.append(cursor)
+		if len(token) != 1 or token not in SHORT_BREAK_CHARS:
+			continue
+		break_end = cursor
+		for trailing in tokens[index + 1 :]:
+			if len(trailing) != 1 or trailing not in SHORT_CLOSING_CHARS:
+				break
+			break_end += len(trailing)
+		positions.append(break_end)
 	return positions
 
 
@@ -247,6 +255,22 @@ def merge_short_cues(edit: dict, source_start: float, source_end: float) -> list
 	return smoothed
 
 
+def _coalesce_safe_chunks(chunks: list[str]) -> list[str]:
+	"""把相鄰短子句併回可讀的最多兩行字幕，避免 0.x 秒快閃。"""
+	result: list[str] = []
+	current = ""
+	for chunk in chunks:
+		candidate = _join_short_zh(current, chunk)
+		if current and _complete_caption_layout(candidate) is None:
+			result.append(current)
+			current = chunk
+		else:
+			current = candidate
+	if current:
+		result.append(current)
+	return result
+
+
 def split_short_text(text: str) -> list[str]:
 	"""只在安全標點後拆 cue；無安全切點時交由字幕檢查要求語意重切。"""
 	text = clean_text(text)
@@ -265,7 +289,7 @@ def split_short_text(text: str) -> list[str]:
 	tail = text[cursor:].strip()
 	if tail:
 		chunks.append(tail)
-	return chunks or [text]
+	return _coalesce_safe_chunks(chunks) or [text]
 
 
 def split_caption(cue: dict, segment_start: float, cue_start: float, cue_end: float, speed: float) -> list[dict]:

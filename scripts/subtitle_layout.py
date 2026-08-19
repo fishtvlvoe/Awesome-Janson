@@ -16,7 +16,8 @@ MAX_ZH_UNITS = 22
 MAX_EN_CHARS = 60
 ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9@%+._~:/?#\[\]&=;()\-]*")
 TRAILING_ASCII_PUNCTUATION = ".,;:!?"
-ATTACHED_TRAILING_PUNCTUATION = set("，。！？；：、,.!?;:")
+CLOSING_DELIMITERS = set("」』）】〉》〕〗〙〛\"'”’)]}")
+ATTACHED_TRAILING_PUNCTUATION = set("，。！？；：、,.!?;:") | CLOSING_DELIMITERS
 
 
 def mixed_text_tokens(text: str) -> list[str]:
@@ -199,7 +200,7 @@ def split_text_parts(text: str, parts: int, english: bool = False) -> list[str]:
 
 def _attach_orphan_punctuation(chunks: list[str]) -> list[str]:
 	"""將因 token 分割留下的單獨標點併回相鄰字幕，不建立孤兒 cue。"""
-	punctuation = set("，。！？；：、,.!?;:")
+	punctuation = set("，。！？；：、,.!?;:") | CLOSING_DELIMITERS
 	result: list[str] = []
 	leading = ""
 	for raw_chunk in chunks:

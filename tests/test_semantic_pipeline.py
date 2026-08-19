@@ -179,6 +179,13 @@ class SemanticPipelineTests(unittest.TestCase):
 		]
 		self.assertEqual(select_short_segments.extend_to_natural_end(cues, 10.0, 12.0, 75.0), 12.0)
 
+	def test_short_selector_extends_across_a_short_asr_gap(self):
+		cues = [
+			{"source_start": 10.0, "source_end": 12.0, "zh": "前半句，"},
+			{"source_start": 12.3, "source_end": 14.0, "zh": "後半句。"},
+		]
+		self.assertEqual(select_short_segments.extend_to_natural_end(cues, 10.0, 12.2, 75.0), 14.0)
+
 	def test_short_caption_keeps_url_as_a_single_protected_token(self):
 		url = "https://example.com/path/to/resource?source=shorts&variant=tw"
 		text = "前面" * 10 + "，" + url + "，" + "後面" * 20
@@ -197,6 +204,19 @@ class SemanticPipelineTests(unittest.TestCase):
 			self.assertTrue(lines[0].startswith(prefix))
 			self.assertTrue(lines[0].endswith("…"))
 			self.assertLessEqual(visual_width(lines[0], font_size), render_shorts.SHORT_CAPTION_WIDTH)
+
+	def test_short_caption_keeps_closing_delimiter_with_previous_clause(self):
+		text = "前" * 25 + "。』" + "後" * 25 + "，"
+		parts = render_shorts.split_short_text(text)
+		self.assertFalse(any(part == "』" for part in parts))
+		self.assertTrue(any(part.endswith("。』") for part in parts))
+
+	def test_short_caption_coalesces_safe_clauses_before_timing(self):
+		text = "重點內容，" * 12
+		parts = render_shorts.split_short_text(text)
+		self.assertLess(len(parts), 12)
+		captions = render_shorts.split_caption({"zh": text}, 0.0, 0.0, 5.4, 1.0)
+		self.assertGreaterEqual(min(caption["end"] - caption["start"] for caption in captions), 1.0)
 
 	def test_unpunctuated_short_caption_keeps_full_text_or_requires_review(self):
 		readable = "這是一段沒有標點的完整口語意群請完整保留"

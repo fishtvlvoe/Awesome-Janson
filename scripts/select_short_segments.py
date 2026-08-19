@@ -40,7 +40,16 @@ def extend_to_natural_end(
 		None,
 	)
 	if current_index is None:
-		return end
+		# 目標點落在 ASR cue 間隙時，先回到前一個完整 cue，再依短暫停頓規則決定是否延伸。
+		previous_indexes = [
+			index
+			for index, cue in enumerate(ordered)
+			if float(cue.get("source_end", 0.0)) <= end + EPSILON
+		]
+		if not previous_indexes:
+			return end
+		current_index = previous_indexes[-1]
+		end = float(ordered[current_index].get("source_end", end))
 	current_end = float(ordered[current_index].get("source_end", end))
 	if current_end > end + EPSILON:
 		if current_end <= allowed_end + EPSILON:
