@@ -148,12 +148,22 @@ class SemanticPipelineTests(unittest.TestCase):
 		text = "前面" * 10 + "，" + url + "，" + "後面" * 20
 		lines, font_size = render_shorts.fit_short_caption_lines(text)
 		self.assertLessEqual(len(lines), 2)
-		self.assertTrue(any(url in line for line in lines))
+		self.assertTrue(any(line.startswith("https://") and line.endswith("…") for line in lines))
 		self.assertFalse(any(line.endswith("https:") or line.endswith("example.") for line in lines))
 		self.assertLessEqual(max(visual_width(line, font_size) for line in lines), render_shorts.SHORT_CAPTION_WIDTH)
 		parts = render_shorts.split_short_text(text)
 		self.assertTrue(any(url in part for part in parts))
 		self.assertFalse(any(part.endswith("https:") or part.endswith("example.") for part in parts))
+
+	def test_extreme_ascii_caption_uses_readable_safe_display_fallback(self):
+		url = "https://" + "a" * 300 + ".example.com/path?source=shorts&variant=tw"
+		for text, prefix in ((url, "https://"), ("A" * 300, "A")):
+			lines, font_size = render_shorts.fit_short_caption_lines(text)
+			self.assertGreaterEqual(font_size, render_shorts.SHORT_CAPTION_MIN_FONT_SIZE)
+			self.assertEqual(len(lines), 1)
+			self.assertTrue(lines[0].startswith(prefix))
+			self.assertTrue(lines[0].endswith("…"))
+			self.assertLessEqual(visual_width(lines[0], font_size), render_shorts.SHORT_CAPTION_WIDTH)
 
 	def test_shortening_bounds_extreme_ascii_term_without_empty_card(self):
 		shortened = talking_head_adapter._shorten("A" * 100, 14)
@@ -261,7 +271,7 @@ class SemanticPipelineTests(unittest.TestCase):
 				4.0,
 			)
 			content = output.read_text(encoding="utf-8")
-			self.assertNotIn(r"\N", content)
+			self.assertIn(r"SEO、\N靠", content)
 			self.assertIn(r"\fs", content)
 			self.assertNotIn("English", content)
 

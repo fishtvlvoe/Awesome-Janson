@@ -72,7 +72,6 @@ SHORT_MAX_CUE_SECONDS = 5.4
 SHORT_CAPTION_WIDTH = 940
 SHORT_CAPTION_FONT_SIZE = 76
 SHORT_CAPTION_MIN_FONT_SIZE = 54
-SHORT_CAPTION_HARD_MIN_FONT_SIZE = 12
 TAIL_PAD_SECONDS = 0.65
 SHORT_TERMINAL_CHARS = set("。！？；：.!?;:")
 SHORT_BREAK_CHARS = SHORT_TERMINAL_CHARS | set("，、,.:")
@@ -94,25 +93,54 @@ def _caption_break_positions(text: str) -> list[int]:
 	return positions
 
 
+def _ellipsis_within_caption_width(text: str, font_size: int) -> str:
+	"""在固定可讀字級內縮略顯示文字；原始 cue 保留給審稿與後續輸出。"""
+	if visual_width(text, font_size) <= SHORT_CAPTION_WIDTH:
+		return text
+	suffix = "…"
+	visible = ""
+	for char in text:
+		if visual_width(visible + char + suffix, font_size) > SHORT_CAPTION_WIDTH:
+			break
+		visible += char
+	return (visible.rstrip() + suffix) if visible.strip() else suffix
+
+
+def _safe_caption_display(text: str, font_size: int) -> str:
+	"""優先保留可辨識網址，其他內容則在 token 邊界前安全省略。"""
+	tokens = mixed_text_tokens(text)
+	for token in tokens:
+		if token.lower().startswith(("https://", "http://", "www.")):
+			return _ellipsis_within_caption_width(token, font_size)
+	visible = ""
+	for token in tokens:
+		candidate = visible + token
+		if visual_width(candidate + "…", font_size) <= SHORT_CAPTION_WIDTH:
+			visible = candidate
+			continue
+		if not visible.strip():
+			return _ellipsis_within_caption_width(token, font_size)
+		return _ellipsis_within_caption_width(visible, font_size)
+	return _ellipsis_within_caption_width(visible, font_size)
+
+
 def fit_short_caption_lines(text: str) -> tuple[list[str], int]:
 	"""優先單行縮小；真的要換行時，只在不屬於 ASCII token 的標點後切。"""
 	text = clean_text(text)
 	if not text:
 		return [""], SHORT_CAPTION_FONT_SIZE
 	# 使用者優先要求固定單行；只有極端長句才改用兩行。
-	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_HARD_MIN_FONT_SIZE - 1, -2):
+	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_MIN_FONT_SIZE - 1, -2):
 		if visual_width(text, font_size) <= SHORT_CAPTION_WIDTH:
 			return [text], font_size
 	breaks = _caption_break_positions(text)
-	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_HARD_MIN_FONT_SIZE - 1, -2):
+	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_MIN_FONT_SIZE - 1, -2):
 		for split_at in sorted(breaks, key=lambda value: abs(value - len(text) / 2)):
 			left, right = text[:split_at].strip(), text[split_at:].strip()
 			if left and right and visual_width(left, font_size) <= SHORT_CAPTION_WIDTH and visual_width(right, font_size) <= SHORT_CAPTION_WIDTH:
 				return [left, right], font_size
-	# 無可用標點時仍保留文字，以可顯示的最小字級輸出；不截掉原本口白。
-	width_at_one = max(visual_width(text, 1), 1.0)
-	font_size = max(1, min(SHORT_CAPTION_FONT_SIZE, int(SHORT_CAPTION_WIDTH / width_at_one)))
-	return [text], font_size
+	# 無法用完整語意與安全標點排版時，顯示層在 54px 縮略；不產生不可讀的微小字幕。
+	return [_safe_caption_display(text, SHORT_CAPTION_MIN_FONT_SIZE)], SHORT_CAPTION_MIN_FONT_SIZE
 
 
 def _punctuation_only(text: str) -> bool:
