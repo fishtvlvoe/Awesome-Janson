@@ -178,6 +178,30 @@ def split_text_parts(text: str, parts: int, english: bool = False) -> list[str]:
 	return [item for item in result if item]
 
 
+def _attach_orphan_punctuation(chunks: list[str]) -> list[str]:
+	"""將因 token 分割留下的單獨標點併回相鄰字幕，不建立孤兒 cue。"""
+	punctuation = set("，。！？；：、,.!?;:")
+	result: list[str] = []
+	leading = ""
+	for raw_chunk in chunks:
+		chunk = raw_chunk.strip()
+		if chunk and all(char in punctuation for char in chunk):
+			if result:
+				result[-1] += chunk
+			else:
+				leading += chunk
+			continue
+		if chunk:
+			result.append(leading + chunk)
+			leading = ""
+	if leading:
+		if result:
+			result[-1] += leading
+		else:
+			result.append(leading)
+	return result
+
+
 def split_subtitle_cue(cue: dict) -> list[dict]:
 	"""限制每個字幕事件最多兩行，超長句拆成多個有時間的 cue。"""
 	zh = re.sub(r"\s*\r?\n\s*", "", str(cue.get("zh", "")).strip())
@@ -191,8 +215,8 @@ def split_subtitle_cue(cue: dict) -> list[dict]:
 	parts = max(zh_parts, en_parts, math.ceil(wrapped_zh_lines / 2), math.ceil(wrapped_en_lines / 2))
 	if parts <= 1:
 		return [normalised]
-	zh_chunks = split_text_parts(zh, parts, english=False)
-	en_chunks = split_text_parts(en, parts, english=True) if en else []
+	zh_chunks = _attach_orphan_punctuation(split_text_parts(zh, parts, english=False))
+	en_chunks = _attach_orphan_punctuation(split_text_parts(en, parts, english=True)) if en else []
 	# 單一超長 token 無法再按詞切 cue；不要為湊原先估算的 parts 產生空字幕事件。
 	parts = max(1, min(parts, max(len(zh_chunks), len(en_chunks), 1)))
 	while len(zh_chunks) < parts:

@@ -185,18 +185,34 @@ def checklist(c, img, tl, p):
         row_top += row_heights[i]
 
 # ---------- 05 印章蓋下 ----------
+def _fit_stamp_font(draw, text, weight, preferred_size, max_width):
+    """進場放大時仍讓文字與外框留在畫布內。"""
+    size = max(1, int(preferred_size))
+    font = F(weight, size)
+    width = draw.textlength(text, font=font) if text else 0
+    if width <= max_width:
+        return font
+    size = max(1, int(size * max_width / width))
+    font = F(weight, size)
+    while size > 1 and draw.textlength(text, font=font) > max_width:
+        size -= 1
+        font = F(weight, size)
+    return font
+
+
 def stamp(c, img, tl, p):
     d = ImageDraw.Draw(img)
     k = c01((tl-0.25)/0.45)
     if k <= 0: return
     sc = 1.9 - 0.9*eoc(k) if k < 1 else 1.0
     a  = int(245*c01((tl-0.25)/0.3) * c01((p["dur"]-tl)/0.4))
-    f1 = F("H", int(c.s(p.get("size",76))*sc))
-    f2 = F("B", int(c.s(40)*sc))
+    pad = c.s(56)*sc
+    max_text_width = max(1, c.W - 2*pad - c.s(56))
+    f1 = _fit_stamp_font(d, p["line1"], "H", int(c.s(p.get("size",76))*sc), max_text_width)
+    f2 = _fit_stamp_font(d, p.get("line2", ""), "B", int(c.s(40)*sc), max_text_width)
     cy = c.BOTTOM - c.s(230)
     tw = max(d.textlength(p["line1"], font=f1),
              d.textlength(p.get("line2",""), font=f2) if p.get("line2") else 0)
-    pad = c.s(56)*sc
     box = [c.CX-tw/2-pad, cy-c.s(30)*sc, c.CX+tw/2+pad, cy+c.s(p.get("line2") and 160 or 110)*sc]
     d.rounded_rectangle(box, radius=int(c.s(24)*sc), outline=GOLD+(a,), width=max(3,int(7*sc)))
     d.rounded_rectangle(box, radius=int(c.s(24)*sc), fill=DARK+(int(a*0.80),))

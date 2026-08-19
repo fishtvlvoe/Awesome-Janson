@@ -136,6 +136,24 @@ class SemanticPipelineTests(unittest.TestCase):
 				wrapped = wrap_chinese(part["zh"])
 				self.assertLessEqual(max(visual_width(line, 50) for line in wrapped.split(r"\N")), 1080)
 
+	def test_long_ascii_subtitle_keeps_terminal_punctuation_with_text(self):
+		url = "https://" + "a" * 100 + ".example.com/path."
+		parts = split_subtitle_cue({"start": 0.0, "end": 5.0, "zh": url, "en": ""})
+		self.assertFalse(any(part["zh"] in {".", "。", ":", "："} for part in parts))
+		self.assertTrue(parts[0]["zh"].endswith("."))
+
+	def test_stamp_font_fits_the_entrance_scale(self):
+		from PIL import Image, ImageDraw
+
+		ctx = talking_head_adapter.anim_lib.Ctx("V")
+		draw = ImageDraw.Draw(Image.new("RGBA", (ctx.W, ctx.H)))
+		scale = 1.9
+		pad = ctx.s(56) * scale
+		max_width = ctx.W - 2 * pad - ctx.s(56)
+		label = "PowerTeamSuperLongName"
+		font = talking_head_adapter.anim_lib._fit_stamp_font(draw, label, "B", int(ctx.s(40) * scale), max_width)
+		self.assertLessEqual(draw.textlength(label, font=font), max_width)
+
 	def test_short_selector_does_not_extend_across_long_silence(self):
 		cues = [
 			{"source_start": 10.0, "source_end": 12.0, "zh": "前半句，"},
