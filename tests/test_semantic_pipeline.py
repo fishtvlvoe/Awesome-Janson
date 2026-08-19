@@ -150,6 +150,12 @@ class SemanticPipelineTests(unittest.TestCase):
 		self.assertFalse(any(part["zh"] in {".", "。", ":", "："} for part in parts))
 		self.assertTrue(parts[0]["zh"].endswith("."))
 
+	def test_truncated_url_does_not_create_a_punctuation_only_line(self):
+		text = "請看 https://" + "a" * 100 + ".example.com/path."
+		lines = wrap_chinese(text).split(r"\N")
+		self.assertFalse(any(line in {".", "。", ":", "："} for line in lines))
+		self.assertTrue(any(line.endswith(".") for line in lines))
+
 	def test_url_tokens_keep_parentheses_and_semicolon_parameters(self):
 		for url in ("https://example.com/a(b)", "https://example.com/foo;param=bar"):
 			self.assertEqual(mixed_text_tokens(url), [url])
@@ -176,11 +182,8 @@ class SemanticPipelineTests(unittest.TestCase):
 	def test_short_caption_keeps_url_as_a_single_protected_token(self):
 		url = "https://example.com/path/to/resource?source=shorts&variant=tw"
 		text = "前面" * 10 + "，" + url + "，" + "後面" * 20
-		lines, font_size = render_shorts.fit_short_caption_lines(text)
-		self.assertLessEqual(len(lines), 2)
-		self.assertTrue(any(line.startswith("https://") and line.endswith("…") for line in lines))
-		self.assertFalse(any(line.endswith("https:") or line.endswith("example.") for line in lines))
-		self.assertLessEqual(max(visual_width(line, font_size) for line in lines), render_shorts.SHORT_CAPTION_WIDTH)
+		with self.assertRaisesRegex(ValueError, "安全標點"):
+			render_shorts.fit_short_caption_lines(text)
 		parts = render_shorts.split_short_text(text)
 		self.assertTrue(any(url in part for part in parts))
 		self.assertFalse(any(part.endswith("https:") or part.endswith("example.") for part in parts))
@@ -204,6 +207,11 @@ class SemanticPipelineTests(unittest.TestCase):
 		self.assertEqual(render_shorts.split_short_text(too_long), [too_long])
 		with self.assertRaisesRegex(ValueError, "安全標點"):
 			render_shorts.fit_short_caption_lines(too_long)
+
+	def test_mixed_oversized_ascii_caption_requires_review_instead_of_dropping_speech(self):
+		text = "請到 https://" + "a" * 100 + ".example.com/path 了解詳情"
+		with self.assertRaisesRegex(ValueError, "安全標點"):
+			render_shorts.fit_short_caption_lines(text)
 
 	def test_shortening_bounds_extreme_ascii_term_without_empty_card(self):
 		shortened = talking_head_adapter._shorten("A" * 100, 14)

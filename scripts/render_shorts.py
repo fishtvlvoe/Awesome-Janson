@@ -127,12 +127,9 @@ def _oversized_ascii_token(text: str, font_size: int) -> str | None:
 	return None
 
 
-def _safe_caption_display(text: str, font_size: int) -> str:
-	"""只有無法逐字呈現的超長 ASCII token 才可於顯示層縮略。"""
-	token = _oversized_ascii_token(text, font_size)
-	if token:
-		return _ellipsis_within_caption_width(token, font_size)
-	raise ValueError("短字幕無安全標點且超過可讀範圍，請在語意編輯階段分句")
+def _safe_caption_display(token: str, font_size: int) -> str:
+	"""只有獨立存在、無法逐字呈現的超長 ASCII token 才可於顯示層縮略。"""
+	return _ellipsis_within_caption_width(token, font_size)
 
 
 def fit_short_caption_lines(text: str) -> tuple[list[str], int]:
@@ -144,8 +141,11 @@ def fit_short_caption_lines(text: str) -> tuple[list[str], int]:
 	if layout is not None:
 		return layout
 	# 網址／版本號等單一 ASCII token 不可安全斷行，才允許顯示層以省略號保留前綴。
-	if _oversized_ascii_token(text, SHORT_CAPTION_MIN_FONT_SIZE):
-		return [_safe_caption_display(text, SHORT_CAPTION_MIN_FONT_SIZE)], SHORT_CAPTION_MIN_FONT_SIZE
+	oversized_token = _oversized_ascii_token(text, SHORT_CAPTION_MIN_FONT_SIZE)
+	if oversized_token:
+		before, after = text.split(oversized_token, 1)
+		if not re.search(r"[\u3400-\u9fffA-Za-z0-9]", before + after):
+			return [_safe_caption_display(oversized_token, SHORT_CAPTION_MIN_FONT_SIZE)], SHORT_CAPTION_MIN_FONT_SIZE
 	# 中文口語內容不能默默截字或在詞中斷行，交回語意階段人工切分。
 	raise ValueError("短字幕無安全標點且超過可讀範圍，請在語意編輯階段分句")
 

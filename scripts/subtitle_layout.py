@@ -16,6 +16,7 @@ MAX_ZH_UNITS = 22
 MAX_EN_CHARS = 60
 ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9@%+._~:/?#\[\]&=;()\-]*")
 TRAILING_ASCII_PUNCTUATION = ".,;:!?"
+ATTACHED_TRAILING_PUNCTUATION = set("，。！？；：、,.!?;:")
 
 
 def mixed_text_tokens(text: str) -> list[str]:
@@ -78,17 +79,24 @@ def visual_width(text: str, font_size: float, english: bool = False) -> float:
 	return sum(_char_width(char, font_size, english=english) for char in text)
 
 
-def _fit_unbroken_token(token: str, max_width: float, font_size: float, english: bool = False) -> str:
+def _fit_unbroken_token(
+	token: str,
+	max_width: float,
+	font_size: float,
+	english: bool = False,
+	trailing_punctuation: str = "",
+) -> str:
 	"""把無法換行的超長 token 安全縮略成可顯示的一行。"""
-	if visual_width(token, font_size, english=english) <= max_width:
-		return token
+	full_text = token + trailing_punctuation
+	if visual_width(full_text, font_size, english=english) <= max_width:
+		return full_text
 	suffix = "…"
 	fitted = ""
 	for char in token:
-		if visual_width(fitted + char + suffix, font_size, english=english) > max_width:
+		if visual_width(fitted + char + suffix + trailing_punctuation, font_size, english=english) > max_width:
 			break
 		fitted += char
-	return (fitted + suffix) if fitted else suffix
+	return (fitted + suffix + trailing_punctuation) if fitted else (suffix + trailing_punctuation)
 
 
 def _display_units(text: str, font_size: float) -> int:
@@ -113,13 +121,23 @@ def wrap_chinese(
 		current = ""
 		# 連續英數、URL 與專有名詞視為一個 token，不能在 Computex、Wi-Fi、https:// 中間斷行。
 		tokens = mixed_text_tokens(source_line)
-		for raw_token in tokens:
-			# 字幕是不可點擊的顯示層；極長 URL 以省略號安全縮略，原始 cue 內容不變。
-			token = (
-				_fit_unbroken_token(raw_token, max_width, font_size)
-				if ASCII_TOKEN_RE.fullmatch(raw_token)
-				else raw_token
-			)
+		index = 0
+		while index < len(tokens):
+			raw_token = tokens[index]
+			trailing_punctuation = ""
+			next_index = index + 1
+			if ASCII_TOKEN_RE.fullmatch(raw_token):
+				# URL 後的句尾標點與縮略 token 一起留在同一行，不能變成獨立字幕。
+				while (
+					next_index < len(tokens)
+					and len(tokens[next_index]) == 1
+					and tokens[next_index] in ATTACHED_TRAILING_PUNCTUATION
+				):
+					trailing_punctuation += tokens[next_index]
+					next_index += 1
+				token = _fit_unbroken_token(raw_token, max_width, font_size, trailing_punctuation=trailing_punctuation)
+			else:
+				token = raw_token
 			candidate = current + token
 			if current and (
 				visual_width(candidate, font_size) > max_width
@@ -129,6 +147,7 @@ def wrap_chinese(
 				current = token
 			else:
 				current = candidate
+			index = next_index
 		if current:
 			lines.append(current.rstrip())
 	return r"\N".join(lines)
