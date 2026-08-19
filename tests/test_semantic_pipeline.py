@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,6 +114,44 @@ class SemanticPipelineTests(unittest.TestCase):
 		self.assertEqual(talking_head_adapter._shorten("PowerTeamSuperLongName", 14), "PowerTeamSuperLongName")
 		self.assertEqual(talking_head_adapter._shorten("這是SEO/BNI/loader", 14), "這是…")
 
+	def test_short_caption_keeps_url_as_a_single_protected_token(self):
+		url = "https://example.com/path/to/resource"
+		text = "前面" * 10 + "，" + url + "，" + "後面" * 20
+		lines, font_size = render_shorts.fit_short_caption_lines(text)
+		self.assertLessEqual(len(lines), 2)
+		self.assertTrue(any(url in line for line in lines))
+		self.assertFalse(any(line.endswith("https:") or line.endswith("example.") for line in lines))
+		self.assertLessEqual(max(visual_width(line, font_size) for line in lines), render_shorts.SHORT_CAPTION_WIDTH)
+		parts = render_shorts.split_short_text(text)
+		self.assertTrue(any(url in part for part in parts))
+		self.assertFalse(any(part.endswith("https:") or part.endswith("example.") for part in parts))
+
+	def test_shortening_bounds_extreme_ascii_term_without_empty_card(self):
+		shortened = talking_head_adapter._shorten("A" * 100, 14)
+		self.assertNotEqual(shortened, "…")
+		self.assertTrue(shortened.endswith("…"))
+		self.assertLessEqual(len(shortened), 30)
+
+	def test_short_render_adds_tail_padding_before_fade(self):
+		with tempfile.TemporaryDirectory() as directory:
+			with patch.object(render_shorts.subprocess, "run") as run:
+				render_shorts.render_segment(
+					Path("source.mp4"),
+					Path(directory) / "output.mp4",
+					Path(directory) / "captions.ass",
+					0.0,
+					10.0,
+					1.0,
+					"editorial",
+				)
+			command = run.call_args.args[0]
+			filter_complex = command[command.index("-filter_complex") + 1]
+			audio_filter = command[command.index("-af") + 1]
+			t_indices = [index for index, value in enumerate(command) if value == "-t"]
+			self.assertIn("tpad=stop_mode=clone", filter_complex)
+			self.assertIn("apad=pad_dur=", audio_filter)
+			self.assertEqual(command[t_indices[-1] + 1], f"{10.0 + render_shorts.TAIL_PAD_SECONDS:.3f}")
+
 	def test_short_caption_mapping_uses_segment_relative_time(self):
 		captions = render_shorts.build_captions(
 			{
@@ -175,7 +214,7 @@ class SemanticPipelineTests(unittest.TestCase):
 		self.assertIn("一般引薦", json.dumps(events, ensure_ascii=False))
 		self.assertNotIn("30%", json.dumps(events, ensure_ascii=False))
 
-	def test_short_ass_wraps_long_text_and_animates_each_cue(self):
+	def test_short_ass_shrinks_long_text_before_forcing_line_break(self):
 		with tempfile.TemporaryDirectory() as directory:
 			output = Path(directory) / "long.ass"
 			render_shorts.write_ass(
@@ -193,8 +232,8 @@ class SemanticPipelineTests(unittest.TestCase):
 				4.0,
 			)
 			content = output.read_text(encoding="utf-8")
-			self.assertIn(r"\N", content)
-			self.assertIn(r"\fs62", content)
+			self.assertNotIn(r"\N", content)
+			self.assertIn(r"\fs", content)
 			self.assertNotIn("English", content)
 
 	def test_talking_head_ass_includes_optional_cta(self):

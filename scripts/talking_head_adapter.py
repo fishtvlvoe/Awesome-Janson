@@ -13,6 +13,9 @@ import sys
 from pathlib import Path
 
 
+MAX_UNBROKEN_ASCII_EVENT_CHARS = 30
+
+
 UPSTREAM_ANIM_DIR = (
 	Path(__file__).resolve().parents[1]
 	/ "integrations"
@@ -37,9 +40,11 @@ def _shorten(value: object, limit: int = 18) -> str:
 	# 不把 SEO／BNI／loader 等 ASCII 專有名詞切成半個字。
 	if re.search(r"[A-Za-z0-9]$", cut):
 		without_partial_term = re.sub(r"[A-Za-z0-9+./_-]+$", "", cut).rstrip()
-		# 單一超長 ASCII 專有名詞寧可原樣交給圖卡縮字，也不能變成只有省略號。
+		# 短 ASCII 專有名詞完整保留；極端長 token 則保留前綴＋省略號，確保圖卡不超出畫布。
 		if not without_partial_term:
-			return text
+			if len(text) <= MAX_UNBROKEN_ASCII_EVENT_CHARS:
+				return text
+			return text[: MAX_UNBROKEN_ASCII_EVENT_CHARS - 1] + "…"
 		cut = without_partial_term
 	return cut + "…"
 

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from render_semantic import escape_filter_path
-from subtitle_layout import ASS_FONT_NAME, resolve_font_path, resolve_fonts_dir, split_text_parts, visual_width, wrap_chinese
+from subtitle_layout import ASS_FONT_NAME, mixed_text_tokens, resolve_font_path, resolve_fonts_dir, split_text_parts, visual_width, wrap_chinese
 from generate_sfx import write_sfx
 from talking_head_adapter import build_events, render_events
 
@@ -72,6 +72,8 @@ SHORT_MAX_CUE_SECONDS = 5.4
 SHORT_CAPTION_WIDTH = 940
 SHORT_CAPTION_FONT_SIZE = 76
 SHORT_CAPTION_MIN_FONT_SIZE = 54
+SHORT_CAPTION_HARD_MIN_FONT_SIZE = 12
+TAIL_PAD_SECONDS = 0.65
 SHORT_TERMINAL_CHARS = set("。！？；：.!?;:")
 SHORT_BREAK_CHARS = SHORT_TERMINAL_CHARS | set("，、,.:")
 
@@ -81,23 +83,35 @@ def _short_units(text: str) -> int:
 	return max(1, math.ceil(visual_width(text, SHORT_CAPTION_FONT_SIZE) / SHORT_CAPTION_FONT_SIZE)) if text else 0
 
 
+def _caption_break_positions(text: str) -> list[int]:
+	"""只回傳自然標點後的位置；URL、版本號等 ASCII token 不能成為切點。"""
+	positions: list[int] = []
+	cursor = 0
+	for token in mixed_text_tokens(text):
+		cursor += len(token)
+		if len(token) == 1 and token in SHORT_BREAK_CHARS:
+			positions.append(cursor)
+	return positions
+
+
 def fit_short_caption_lines(text: str) -> tuple[list[str], int]:
-	"""優先單行縮小；真的要換行時，只在標點後切。"""
+	"""優先單行縮小；真的要換行時，只在不屬於 ASCII token 的標點後切。"""
 	text = clean_text(text)
 	if not text:
 		return [""], SHORT_CAPTION_FONT_SIZE
-	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_MIN_FONT_SIZE - 1, -2):
+	# 使用者優先要求固定單行；只有極端長句才改用兩行。
+	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_HARD_MIN_FONT_SIZE - 1, -2):
 		if visual_width(text, font_size) <= SHORT_CAPTION_WIDTH:
 			return [text], font_size
-	breaks = [index + 1 for index, char in enumerate(text) if char in SHORT_BREAK_CHARS]
-	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_MIN_FONT_SIZE - 1, -2):
+	breaks = _caption_break_positions(text)
+	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_HARD_MIN_FONT_SIZE - 1, -2):
 		for split_at in sorted(breaks, key=lambda value: abs(value - len(text) / 2)):
 			left, right = text[:split_at].strip(), text[split_at:].strip()
 			if left and right and visual_width(left, font_size) <= SHORT_CAPTION_WIDTH and visual_width(right, font_size) <= SHORT_CAPTION_WIDTH:
 				return [left, right], font_size
-	# 沒有合適標點時不硬切中文；縮到能完整顯示的一行。
-	width = max(visual_width(text, SHORT_CAPTION_MIN_FONT_SIZE), 1.0)
-	font_size = max(36, min(SHORT_CAPTION_FONT_SIZE, int(SHORT_CAPTION_MIN_FONT_SIZE * SHORT_CAPTION_WIDTH / width)))
+	# 無可用標點時仍保留文字，以可顯示的最小字級輸出；不截掉原本口白。
+	width_at_one = max(visual_width(text, 1), 1.0)
+	font_size = max(1, min(SHORT_CAPTION_FONT_SIZE, int(SHORT_CAPTION_WIDTH / width_at_one)))
 	return [text], font_size
 
 
@@ -348,23 +362,28 @@ def render_segment(
 			f"enable='between(t,{start_time:.3f},{end_time:.3f})'[{out_label}]"
 		)
 		last_video = out_label
-	# 動畫先蓋在原片上，字幕最後疊回來，避免 B-roll／卡片把字遮掉；尾端再淡出。
-	output_duration = max(0.1, duration / speed)
+	# 尾端先複製最後一幀／補靜音，再淡出；不讓淡出吃掉最後一句口白。
+	content_duration = max(0.1, duration / speed)
+	rendered_duration = content_duration + TAIL_PAD_SECONDS
 	filters.append(
-		f"[{last_video}]subtitles=filename='{ass_file}':fontsdir='{fonts_dir_value}',"
-		f"fade=t=out:st={max(0.0, output_duration - 0.45):.3f}:d=0.45[v]"
+		f"[{last_video}]tpad=stop_mode=clone:stop_duration={TAIL_PAD_SECONDS:.3f},"
+		f"subtitles=filename='{ass_file}':fontsdir='{fonts_dir_value}',"
+		f"fade=t=out:st={max(0.0, rendered_duration - 0.45):.3f}:d=0.45[v]"
 	)
 
 	map_audio = "0:a:0?"
 	audio_args: list[str] = [
 		"-af",
-		f"{atempo_filter(speed)},afade=t=out:st={max(0.0, output_duration - 0.55):.3f}:d=0.55",
+		f"{atempo_filter(speed)},apad=pad_dur={TAIL_PAD_SECONDS:.3f},"
+		f"afade=t=out:st={max(0.0, rendered_duration - 0.55):.3f}:d=0.55",
 	]
 	if bgm or sfx:
-		music_end = max(0.1, duration / speed)
+		music_end = rendered_duration
 		mix_labels = []
 		# 混入 BGM／SFX 時保留人聲頭部空間，避免總音量突然爆高。
-		filters.append(f"[0:a:0]aresample=48000,{atempo_filter(speed)},volume=0.5[voice]")
+		filters.append(
+			f"[0:a:0]aresample=48000,{atempo_filter(speed)},apad=pad_dur={TAIL_PAD_SECONDS:.3f},volume=0.5[voice]"
+		)
 		mix_labels.append("[voice]")
 		next_audio_index = 1 + len(animation_events or [])
 		if bgm:
@@ -394,7 +413,7 @@ def render_segment(
 		*input_args,
 		"-filter_complex", ";".join(filters), "-map", "[v]", "-map", map_audio,
 		*audio_args,
-		"-t", f"{duration / speed:.3f}",
+		"-t", f"{rendered_duration:.3f}",
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p", "-r", "30",
 		"-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-shortest", "-movflags", "+faststart", str(output),
 	]
@@ -482,7 +501,8 @@ def main() -> None:
 			"bgm": str(bgm_path) if bgm_path else None,
 			"sfx": str(sfx_path) if sfx_path else None,
 			"cta": args.cta,
-			"duration": round(output_duration, 3),
+			"content_duration": round(output_duration, 3),
+			"duration": round(output_duration + TAIL_PAD_SECONDS, 3),
 			"ass": str(ass),
 			"output": str(output),
 			"caption_count": len(captions),

@@ -14,6 +14,24 @@ EN_FONT_SIZE = 30
 MAX_TEXT_WIDTH = 1080.0
 MAX_ZH_UNITS = 22
 MAX_EN_CHARS = 60
+ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9@%+._~:/?#\[\]-]*")
+TRAILING_ASCII_PUNCTUATION = ".,;:!?"
+
+
+def mixed_text_tokens(text: str) -> list[str]:
+	"""將 URL、版本號、email 等 ASCII token 視為不可分割的字幕單位。"""
+	result: list[str] = []
+	cursor = 0
+	for match in ASCII_TOKEN_RE.finditer(text):
+		result.extend(text[cursor : match.start()])
+		token = match.group()
+		core = token.rstrip(TRAILING_ASCII_PUNCTUATION)
+		if core:
+			result.append(core)
+		result.extend(token[len(core) :])
+		cursor = match.end()
+	result.extend(text[cursor:])
+	return result
 
 
 def resolve_font_path() -> Path | None:
@@ -62,8 +80,8 @@ def visual_width(text: str, font_size: float, english: bool = False) -> float:
 
 def _display_units(text: str, font_size: float) -> int:
 	units = 0
-	for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9+./_-]*|.", text):
-		if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+./_-]*", token):
+	for token in mixed_text_tokens(text):
+		if ASCII_TOKEN_RE.fullmatch(token):
 			units += max(1, round(visual_width(token, font_size, english=True) / font_size))
 		else:
 			units += 1
@@ -80,8 +98,8 @@ def wrap_chinese(
 	lines: list[str] = []
 	for source_line in re.split(r"\r?\n", text.strip()):
 		current = ""
-		# 連續英數與專有名詞視為一個 token，不能在 Computex、Wi-Fi 中間斷行。
-		tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9+./_-]*|.", source_line)
+		# 連續英數、URL 與專有名詞視為一個 token，不能在 Computex、Wi-Fi、https:// 中間斷行。
+		tokens = mixed_text_tokens(source_line)
 		for token in tokens:
 			candidate = current + token
 			if current and (
@@ -100,7 +118,7 @@ def wrap_chinese(
 def _split_tokens(text: str, english: bool) -> list[str]:
 	if english:
 		return re.findall(r"\S+\s*", text.strip())
-	return re.findall(r"[A-Za-z0-9][A-Za-z0-9+./_-]*|.", text.strip())
+	return mixed_text_tokens(text.strip())
 
 
 def _token_units(token: str, english: bool) -> float:
