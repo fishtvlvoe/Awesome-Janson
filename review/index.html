@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="剪神 Awesome-Janson 文字剪輯審稿器">
+  <title>剪神｜文字剪輯審稿</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-theme="dark">
+  <header class="topbar">
+    <div class="brand" aria-label="剪神文字剪輯審稿器">
+      <span class="brand-mark">J</span>
+      <span class="brand-copy">
+        <strong>剪神</strong>
+        <small>文字剪輯審稿</small>
+      </span>
+    </div>
+    <div class="topbar-actions">
+      <input id="edit-file" type="file" accept=".json,application/json" hidden>
+      <label class="button button-secondary" for="edit-file">載入語意 JSON</label>
+      <input id="video-file" type="file" accept="video/*,.mp4,.mov,.mkv" hidden>
+      <label class="button button-secondary" for="video-file">載入原始影片</label>
+      <button id="export-review" class="button button-secondary" type="button" disabled>匯出審核檔</button>
+      <button id="export-edit" class="button button-primary" type="button" disabled>匯出已套用 JSON</button>
+      <button id="theme-toggle" class="icon-button" type="button" title="切換主題" aria-label="切換主題">☼</button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <section class="source-strip" aria-label="來源檔案">
+      <div class="source-file">
+        <span class="source-icon">▣</span>
+        <div>
+          <strong id="edit-name">尚未載入語意編輯</strong>
+          <span id="video-name">請先載入 semantic_edit.json；影片可選擇性載入</span>
+        </div>
+      </div>
+      <div class="source-meta" id="source-meta">等待載入</div>
+    </section>
+
+    <section class="workspace">
+      <aside class="sidebar panel" aria-label="逐字稿列表">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">TRANSCRIPT</p>
+            <h1>逐字稿</h1>
+          </div>
+          <span class="count-badge" id="cue-count">0</span>
+        </div>
+        <div class="search-wrap">
+          <span aria-hidden="true">⌕</span>
+          <input id="search" type="search" placeholder="搜尋中文、英文或時間碼" autocomplete="off">
+        </div>
+        <div class="filter-tabs" role="tablist" aria-label="篩選逐字稿">
+          <button class="filter-tab is-active" data-filter="all" type="button">全部</button>
+          <button class="filter-tab" data-filter="suggested" type="button">AI 建議</button>
+          <button class="filter-tab" data-filter="approved" type="button">已核准</button>
+          <button class="filter-tab" data-filter="keep" type="button">已保留</button>
+        </div>
+        <div class="cue-list" id="cue-list">
+          <div class="empty-state compact">
+            <span class="empty-icon">≡</span>
+            <strong>尚未載入逐字稿</strong>
+            <p>載入譯神產出的 semantic_edit.json 後，會在這裡逐句審核。</p>
+          </div>
+        </div>
+      </aside>
+
+      <section class="editor-column" aria-label="影片預覽與文字編輯">
+        <div class="video-card panel">
+          <div class="video-stage" id="video-stage">
+            <video id="preview" controls preload="metadata" playsinline>
+              您的瀏覽器不支援影片預覽。
+            </video>
+            <div class="video-empty" id="video-empty">
+              <span class="empty-icon">▶</span>
+              <strong>載入原始影片以預覽</strong>
+              <p>沒有影片也可以先審核文字與時間碼。</p>
+            </div>
+            <div class="subtitle-overlay" id="subtitle-overlay" hidden aria-live="polite">
+              <div class="preview-subtitle-zh" id="preview-subtitle-zh"></div>
+              <div class="preview-subtitle-en" id="preview-subtitle-en"></div>
+            </div>
+          </div>
+          <div class="video-footer">
+            <span id="preview-time" class="mono">00:00.00</span>
+            <span id="preview-range">尚未選取句子</span>
+            <button id="play-cue" class="mini-button" type="button" disabled>播放這句</button>
+            <button id="enable-audio" class="mini-button" type="button" disabled>開啟聲音</button>
+          </div>
+        </div>
+
+        <div class="transcript-card panel" id="transcript-card">
+          <div class="transcript-header">
+            <div>
+              <p class="eyebrow">SELECT TO EDIT</p>
+              <h2 id="selected-title">選取左側句子開始審核</h2>
+            </div>
+            <span id="selected-status" class="status-badge status-empty">未選取</span>
+          </div>
+          <div class="selected-time mono" id="selected-time">—</div>
+          <div class="text-block">
+            <span class="text-label">繁中主字幕</span>
+            <p id="selected-zh" class="zh-text">—</p>
+          </div>
+          <div class="text-block secondary-text-block">
+            <span class="text-label">English subtitle</span>
+            <p id="selected-en" class="en-text">—</p>
+          </div>
+          <div class="word-strip" id="word-strip" aria-label="單字時間軸"></div>
+          <p class="helper-text" id="word-helper">紅色標籤是譯神提出的贅詞候選；點選標籤可以單獨核准或取消。</p>
+          <div class="cue-actions">
+            <button id="keep-cue" class="button button-secondary" type="button" disabled>保留整句</button>
+            <button id="approve-fillers" class="button button-warning" type="button" disabled>採用贅詞建議</button>
+            <button id="delete-cue" class="button button-danger" type="button" disabled>刪除整句</button>
+            <button id="reset-cue" class="button button-ghost" type="button" disabled>還原待確認</button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="inspector panel" aria-label="審核摘要與操作">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">REVIEW BOARD</p>
+            <h2>審核進度</h2>
+          </div>
+          <span class="review-dot" id="review-dot"></span>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-card">
+            <span>AI 建議</span>
+            <strong id="stat-suggested">0</strong>
+            <small>個贅詞候選</small>
+          </div>
+          <div class="stat-card">
+            <span>已核准</span>
+            <strong id="stat-approved">0</strong>
+            <small>個單字／句子</small>
+          </div>
+          <div class="stat-card stat-wide">
+            <span>預估剪短</span>
+            <strong id="stat-duration">0.00 秒</strong>
+            <small>只計算人工核准項目</small>
+          </div>
+        </div>
+
+        <div class="subtitle-settings">
+          <div class="section-heading">
+            <h3>字幕顯示</h3>
+            <span class="caption">預覽＋匯出</span>
+          </div>
+          <label class="range-row" for="zh-font-size">
+            <span>中文主字幕 <output id="zh-font-size-value">50px</output></span>
+            <input id="zh-font-size" type="range" min="24" max="64" step="1" value="50">
+          </label>
+          <label class="range-row" for="en-font-size">
+            <span>英文副字幕 <output id="en-font-size-value">30px</output></span>
+            <input id="en-font-size" type="range" min="14" max="42" step="1" value="30">
+          </label>
+          <label class="check-row" for="show-english">
+            <input id="show-english" type="checkbox" checked>
+            <span>顯示英文副字幕</span>
+          </label>
+          <button id="reset-subtitle-style" class="wide-button button-ghost" type="button">恢復字幕預設值</button>
+          <p class="settings-hint">設定會寫入 reviewed JSON；重新渲染後套用到正式字幕。</p>
+        </div>
+
+        <div class="bulk-actions">
+          <div class="section-heading">
+            <h3>批次操作</h3>
+            <span class="caption">保守模式</span>
+          </div>
+          <button id="approve-all" class="wide-button button-warning" type="button" disabled>全部採用 AI 建議</button>
+          <button id="keep-all" class="wide-button button-secondary" type="button" disabled>全部保留，不剪任何建議</button>
+          <button id="reset-all" class="wide-button button-ghost" type="button" disabled>清除人工審核</button>
+        </div>
+
+        <div class="legend">
+          <div class="section-heading"><h3>狀態說明</h3></div>
+          <div class="legend-row"><span class="legend-dot dot-suggested"></span><span><strong>AI 建議</strong><small>尚未實際剪除</small></span></div>
+          <div class="legend-row"><span class="legend-dot dot-approved"></span><span><strong>已核准</strong><small>匯出後會進入 EDL</small></span></div>
+          <div class="legend-row"><span class="legend-dot dot-kept"></span><span><strong>已保留</strong><small>明確禁止自動刪除</small></span></div>
+        </div>
+
+        <div class="shortcut-box">
+          <div class="section-heading"><h3>快速鍵</h3></div>
+          <div class="shortcut-row"><kbd>Space</kbd><span>播放／暫停目前句子</span></div>
+          <div class="shortcut-row"><kbd>↑</kbd><kbd>↓</kbd><span>上一句／下一句</span></div>
+          <div class="shortcut-row"><kbd>Enter</kbd><span>播放目前句子</span></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span id="save-status">審核結果只會留在瀏覽器記憶體；完成後請匯出 JSON。</span>
+    <span>剪神 / Awesome-Janson · manual-review v1</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.mp4
+*.m4a
+*.wav
+*.mp3
+reviewed_output/
+review_output/
+*.log

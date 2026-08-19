@@ -1,0 +1,211 @@
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import apply_review  # noqa: E402
+import render_semantic  # noqa: E402
+import render_shorts  # noqa: E402
+import semantic_edit  # noqa: E402
+import talking_head_adapter  # noqa: E402
+from subtitle_layout import split_subtitle_cue, visual_width, wrap_chinese, wrap_english  # noqa: E402
+
+
+class SemanticPipelineTests(unittest.TestCase):
+	def test_unsafe_drop_tokens_are_kept(self):
+		words = [
+			{"id": "0:0", "text": "嗯", "start": 0.0, "end": 0.2},
+			{"id": "0:1", "text": "客戶", "start": 0.6, "end": 1.0},
+			{"id": "0:2", "text": "這個", "start": 1.0, "end": 1.3},
+		]
+		result = {
+			"cues": [
+				{
+					"word_ids": ["0:0", "0:1", "0:2"],
+					"drop_word_ids": ["0:0", "0:1", "0:2"],
+					"zh": "客戶這個",
+					"en": "This client",
+					"confidence": 0.8,
+				}
+			]
+		}
+		payload = semantic_edit.validate_and_normalise(result, words, 0.0, 2.0)
+		self.assertEqual([item["text"] for item in payload["deletions"]], ["嗯"])
+		self.assertEqual(payload["cues"][0]["drop_word_ids"], ["0:0"])
+
+	def test_frame_alignment_keeps_audio_and_video_on_same_grid(self):
+		cuts = [{"start": 0.42, "end": 0.58, "word_ids": ["0:0"], "text": "嗯"}]
+		aligned = render_semantic.frame_align_intervals(cuts)
+		self.assertEqual(aligned[0]["start"], 0.433333)
+		self.assertEqual(aligned[0]["end"], 0.6)
+
+	def test_output_time_subtracts_previous_cuts(self):
+		cuts = [{"start": 1.0, "end": 1.5}]
+		self.assertAlmostEqual(render_semantic.output_time(2.0, 0.0, cuts), 1.5)
+		self.assertAlmostEqual(render_semantic.output_time(1.2, 0.0, cuts), 1.0)
+
+	def test_manual_review_only_cuts_approved_words_or_sentences(self):
+		edit = {
+			"schema_version": 1,
+			"words": [
+				{"id": "0:0", "text": "嗯", "start": 0.0, "end": 0.2},
+				{"id": "0:1", "text": "保留", "start": 0.3, "end": 0.8},
+				{"id": "1:0", "text": "整句", "start": 1.2, "end": 1.8},
+				{"id": "1:1", "text": "刪除", "start": 1.9, "end": 2.4},
+			],
+			"cues": [
+				{"id": 1, "word_ids": ["0:0", "0:1"], "source_start": 0.0, "source_end": 0.8, "zh": "保留"},
+				{"id": 2, "word_ids": ["1:0", "1:1"], "source_start": 1.2, "source_end": 2.4, "zh": "整句刪除"},
+			],
+			"deletions": [{"word_id": "0:0", "start": 0.0, "end": 0.2}],
+		}
+		reviewed = apply_review.apply_review(
+			edit,
+			{
+				"kind": "awesome-janson-review",
+				"approved_word_ids": ["0:0"],
+				"approved_cue_ids": [2],
+				"decision_by_cue": {"1": "filler", "2": "delete"},
+				"subtitle_style": {"zh_font_size": 58, "en_font_size": 22, "show_english": False},
+			},
+		)
+		cuts = render_semantic.build_intervals(reviewed, physical_cut=True)
+		self.assertEqual([(cut["start"], cut["end"]) for cut in cuts], [(0.0, 0.2), (1.2, 2.4)])
+		self.assertEqual(len(render_semantic.build_cues(reviewed, 0.0, cuts)), 1)
+		self.assertEqual(reviewed["review"]["mode"], "manual-review")
+		self.assertEqual(reviewed["subtitle_style"], {"zh_font_size": 58, "en_font_size": 22, "show_english": False})
+
+	def test_mixed_subtitles_wrap_without_splitting_ascii_words(self):
+		zh = wrap_chinese("大家最紅的黃仁勳，每年Computex一定要搬這些東西到Computex去。")
+		en = wrap_english("The most popular speaker presents these examples at Computex every year.")
+		self.assertIn("Computex", zh)
+		self.assertLessEqual(max(visual_width(line, 34) for line in zh.split("\\N")), 1080)
+		self.assertLessEqual(max(visual_width(line, 20, english=True) for line in en.split("\\N")), 1080)
+
+	def test_short_caption_mapping_uses_segment_relative_time(self):
+		captions = render_shorts.build_captions(
+			{
+				"cues": [
+					{"source_start": 100.0, "source_end": 102.0, "zh": "第一句", "en": "First"},
+					{"source_start": 104.0, "source_end": 106.0, "zh": "第二句", "en": "Second"},
+				]
+			},
+			100.0,
+			110.0,
+			2.0,
+		)
+		self.assertEqual(captions[0]["start"], 0.0)
+		self.assertGreater(captions[1]["start"], captions[0]["end"])
+
+	def test_short_captions_merge_orphans_and_hide_english(self):
+		captions = render_shorts.build_captions(
+			{
+				"cues": [
+					{"source_start": 100.0, "source_end": 101.0, "zh": "這是一句話，我"},
+					{"source_start": 101.0, "source_end": 101.4, "zh": "們測一下。", "en": "Let's test."},
+					{"source_start": 102.0, "source_end": 102.2, "zh": "麼？", "en": "What?"},
+				],
+			},
+			100.0,
+			103.0,
+			1.0,
+		)
+		self.assertTrue(any("我們測一下" in caption["zh"] for caption in captions))
+		self.assertFalse(any(caption["en"] for caption in captions))
+		self.assertFalse(any(len(caption["zh"]) <= 2 for caption in captions))
+
+	def test_short_prompt_requires_chinese_only_complete_cues(self):
+		prompt = semantic_edit.make_prompt(
+			[{"id": "0:0", "start": 0.0, "end": 1.0, "text": "什麼"}],
+			0.0,
+			1.0,
+			shorts=True,
+		)
+		self.assertIn("en 欄位一律輸出空字串", prompt)
+		self.assertIn('"en":""', prompt)
+		self.assertIn("禁止讓畫面只剩一個字", prompt)
+
+	def test_talking_head_events_cover_timeline_and_use_existing_caption_text(self):
+		events = talking_head_adapter.build_events(
+			[
+				{"start": 0.0, "end": 2.0, "zh": "一般引薦，不要捏造數字"},
+				{"start": 2.0, "end": 5.0, "zh": "理想引薦與合作"},
+				{"start": 5.0, "end": 8.0, "zh": "協力廠商與接水管"},
+				{"start": 8.0, "end": 12.0, "zh": "夢幻引薦與長期合作"},
+			],
+			52.0,
+			include_broll=True,
+		)
+		self.assertGreaterEqual(len(events), 5)
+		self.assertEqual(events[0]["kind"], "broll")
+		self.assertIn("checklist", [event["kind"] for event in events])
+		self.assertIn("stamp", [event["kind"] for event in events])
+		self.assertLessEqual(max(events[index + 1]["start"] - (events[index]["start"] + events[index]["duration"]) for index in range(len(events) - 1)), 3.0)
+		self.assertIn("一般引薦", json.dumps(events, ensure_ascii=False))
+		self.assertNotIn("30%", json.dumps(events, ensure_ascii=False))
+
+	def test_short_ass_wraps_long_text_and_animates_each_cue(self):
+		with tempfile.TemporaryDirectory() as directory:
+			output = Path(directory) / "long.ass"
+			render_shorts.write_ass(
+				[
+					{
+						"start": 0.0,
+						"end": 4.0,
+						"zh": "一般引薦，其實你在外面靠 SEO、靠你的廣告行銷，",
+						"en": "",
+					}
+				],
+				output,
+				"測試標題",
+				"editorial",
+				4.0,
+			)
+			content = output.read_text(encoding="utf-8")
+			self.assertIn(r"\N", content)
+			self.assertIn(r"\fscx88", content)
+			self.assertNotIn("English", content)
+
+	def test_talking_head_ass_includes_optional_cta(self):
+		with tempfile.TemporaryDirectory() as directory:
+			output = Path(directory) / "test.ass"
+			render_shorts.write_ass([], output, "測試標題", "editorial", 20.0, "追蹤剪神")
+			content = output.read_text(encoding="utf-8")
+			self.assertIn("Style: CTA", content)
+			self.assertIn("追蹤剪神", content)
+
+	def test_newline_heavy_model_cue_is_normalised_before_wrapping(self):
+		parts = split_subtitle_cue(
+			{
+				"start": 0.0,
+				"end": 5.0,
+				"zh": "第一句\n第二句",
+				"en": "First sentence,\nsecond sentence,\nthey would say,",
+			}
+		)
+		for part in parts:
+			self.assertLessEqual(len(wrap_chinese(part["zh"]).split("\\N")), 2)
+			self.assertLessEqual(len(wrap_english(part["en"]).split("\\N")), 2)
+		self.assertNotIn("\n", part["en"])
+
+	def test_long_cue_is_split_to_at_most_two_lines_per_language(self):
+		cue = {
+			"start": 0.0,
+			"end": 5.0,
+			"zh": "大家最紅的黃仁勳、黃爸，每年Computex一定要搬這些東西到Computex去。",
+			"en": "The most popular Jensen Huang, Huang-ba, every year at Computex, we have to move these things to Computex.",
+		}
+		parts = split_subtitle_cue(cue)
+		self.assertGreaterEqual(len(parts), 1)
+		for part in parts:
+			self.assertLessEqual(len(wrap_chinese(part["zh"]).split("\\N")), 2)
+			self.assertLessEqual(len(wrap_english(part["en"]).split("\\N")), 2)
+
+
+if __name__ == "__main__":
+	unittest.main()

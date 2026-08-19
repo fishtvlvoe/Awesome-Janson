@@ -1,0 +1,4 @@
+Upstream: https://github.com/harry0703/MoneyPrinterTurbo
+Commit inspected: 1339ee87c6336df2a599118f7d9e6f5fc09c2064
+Imported scope: docs/skill/SKILL.md and docs/skill/mpt_agent.py only.
+The full 345 MB application, WebUI, Docker files, resource media and dependency tree are not vendored into Awesome-Janson.
