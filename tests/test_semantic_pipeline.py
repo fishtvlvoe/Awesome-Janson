@@ -16,7 +16,7 @@ import render_shorts  # noqa: E402
 import select_short_segments  # noqa: E402
 import semantic_edit  # noqa: E402
 import talking_head_adapter  # noqa: E402
-from subtitle_layout import split_subtitle_cue, visual_width, wrap_chinese, wrap_english  # noqa: E402
+from subtitle_layout import mixed_text_tokens, split_subtitle_cue, visual_width, wrap_chinese, wrap_english  # noqa: E402
 
 
 class SemanticPipelineTests(unittest.TestCase):
@@ -98,6 +98,14 @@ class SemanticPipelineTests(unittest.TestCase):
 		]
 		self.assertEqual(select_short_segments.extend_to_natural_end(cues, 10.0, 14.0, 75.0), 16.0)
 
+	def test_short_selector_recognises_sentence_end_before_closing_quote(self):
+		for text in ("他說：「好。」", "（完整句。）"):
+			cues = [
+				{"source_start": 10.0, "source_end": 12.0, "zh": text},
+				{"source_start": 12.0, "source_end": 14.0, "zh": "下一句。"},
+			]
+			self.assertEqual(select_short_segments.extend_to_natural_end(cues, 10.0, 12.0, 75.0), 12.0)
+
 	def test_short_selector_does_not_stop_mid_cue_or_at_ascii_colon(self):
 		terminal_cue = [{"source_start": 10.0, "source_end": 16.0, "zh": "完整句。"}]
 		self.assertEqual(select_short_segments.extend_to_natural_end(terminal_cue, 10.0, 14.0, 75.0), 16.0)
@@ -142,6 +150,10 @@ class SemanticPipelineTests(unittest.TestCase):
 		self.assertFalse(any(part["zh"] in {".", "。", ":", "："} for part in parts))
 		self.assertTrue(parts[0]["zh"].endswith("."))
 
+	def test_url_tokens_keep_parentheses_and_semicolon_parameters(self):
+		for url in ("https://example.com/a(b)", "https://example.com/foo;param=bar"):
+			self.assertEqual(mixed_text_tokens(url), [url])
+
 	def test_stamp_font_fits_the_entrance_scale(self):
 		from PIL import Image, ImageDraw
 
@@ -182,6 +194,16 @@ class SemanticPipelineTests(unittest.TestCase):
 			self.assertTrue(lines[0].startswith(prefix))
 			self.assertTrue(lines[0].endswith("…"))
 			self.assertLessEqual(visual_width(lines[0], font_size), render_shorts.SHORT_CAPTION_WIDTH)
+
+	def test_unpunctuated_short_caption_keeps_full_text_or_requires_review(self):
+		readable = "這是一段沒有標點的完整口語意群請完整保留"
+		lines, _ = render_shorts.fit_short_caption_lines(readable)
+		self.assertEqual(lines, [readable])
+		self.assertNotIn("…", lines[0])
+		too_long = "這" * 40
+		self.assertEqual(render_shorts.split_short_text(too_long), [too_long])
+		with self.assertRaisesRegex(ValueError, "安全標點"):
+			render_shorts.fit_short_caption_lines(too_long)
 
 	def test_shortening_bounds_extreme_ascii_term_without_empty_card(self):
 		shortened = talking_head_adapter._shorten("A" * 100, 14)

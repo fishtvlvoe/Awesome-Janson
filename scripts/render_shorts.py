@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from render_semantic import escape_filter_path
-from subtitle_layout import ASS_FONT_NAME, mixed_text_tokens, resolve_font_path, resolve_fonts_dir, split_text_parts, visual_width, wrap_chinese
+from subtitle_layout import ASS_FONT_NAME, ASCII_TOKEN_RE, mixed_text_tokens, resolve_font_path, resolve_fonts_dir, visual_width, wrap_chinese
 from generate_sfx import write_sfx
 from talking_head_adapter import build_events, render_events
 
@@ -71,7 +71,7 @@ SHORT_MAX_CUE_UNITS = 28
 SHORT_MAX_CUE_SECONDS = 5.4
 SHORT_CAPTION_WIDTH = 940
 SHORT_CAPTION_FONT_SIZE = 76
-SHORT_CAPTION_MIN_FONT_SIZE = 54
+SHORT_CAPTION_MIN_FONT_SIZE = 42
 TAIL_PAD_SECONDS = 0.65
 SHORT_TERMINAL_CHARS = set("。！？；：.!?;:")
 SHORT_BREAK_CHARS = SHORT_TERMINAL_CHARS | set("，、,.:")
@@ -106,30 +106,8 @@ def _ellipsis_within_caption_width(text: str, font_size: int) -> str:
 	return (visible.rstrip() + suffix) if visible.strip() else suffix
 
 
-def _safe_caption_display(text: str, font_size: int) -> str:
-	"""優先保留可辨識網址，其他內容則在 token 邊界前安全省略。"""
-	tokens = mixed_text_tokens(text)
-	for token in tokens:
-		if token.lower().startswith(("https://", "http://", "www.")):
-			return _ellipsis_within_caption_width(token, font_size)
-	visible = ""
-	for token in tokens:
-		candidate = visible + token
-		if visual_width(candidate + "…", font_size) <= SHORT_CAPTION_WIDTH:
-			visible = candidate
-			continue
-		if not visible.strip():
-			return _ellipsis_within_caption_width(token, font_size)
-		return _ellipsis_within_caption_width(visible, font_size)
-	return _ellipsis_within_caption_width(visible, font_size)
-
-
-def fit_short_caption_lines(text: str) -> tuple[list[str], int]:
-	"""優先單行縮小；真的要換行時，只在不屬於 ASCII token 的標點後切。"""
-	text = clean_text(text)
-	if not text:
-		return [""], SHORT_CAPTION_FONT_SIZE
-	# 使用者優先要求固定單行；只有極端長句才改用兩行。
+def _complete_caption_layout(text: str) -> tuple[list[str], int] | None:
+	"""回傳不截字的可讀排版；無法安全排版時回傳 ``None``。"""
 	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_MIN_FONT_SIZE - 1, -2):
 		if visual_width(text, font_size) <= SHORT_CAPTION_WIDTH:
 			return [text], font_size
@@ -139,8 +117,37 @@ def fit_short_caption_lines(text: str) -> tuple[list[str], int]:
 			left, right = text[:split_at].strip(), text[split_at:].strip()
 			if left and right and visual_width(left, font_size) <= SHORT_CAPTION_WIDTH and visual_width(right, font_size) <= SHORT_CAPTION_WIDTH:
 				return [left, right], font_size
-	# 無法用完整語意與安全標點排版時，顯示層在 54px 縮略；不產生不可讀的微小字幕。
-	return [_safe_caption_display(text, SHORT_CAPTION_MIN_FONT_SIZE)], SHORT_CAPTION_MIN_FONT_SIZE
+	return None
+
+
+def _oversized_ascii_token(text: str, font_size: int) -> str | None:
+	for token in mixed_text_tokens(text):
+		if ASCII_TOKEN_RE.fullmatch(token) and visual_width(token, font_size) > SHORT_CAPTION_WIDTH:
+			return token
+	return None
+
+
+def _safe_caption_display(text: str, font_size: int) -> str:
+	"""只有無法逐字呈現的超長 ASCII token 才可於顯示層縮略。"""
+	token = _oversized_ascii_token(text, font_size)
+	if token:
+		return _ellipsis_within_caption_width(token, font_size)
+	raise ValueError("短字幕無安全標點且超過可讀範圍，請在語意編輯階段分句")
+
+
+def fit_short_caption_lines(text: str) -> tuple[list[str], int]:
+	"""優先單行縮小；真的要換行時，只在不屬於 ASCII token 的標點後切。"""
+	text = clean_text(text)
+	if not text:
+		return [""], SHORT_CAPTION_FONT_SIZE
+	layout = _complete_caption_layout(text)
+	if layout is not None:
+		return layout
+	# 網址／版本號等單一 ASCII token 不可安全斷行，才允許顯示層以省略號保留前綴。
+	if _oversized_ascii_token(text, SHORT_CAPTION_MIN_FONT_SIZE):
+		return [_safe_caption_display(text, SHORT_CAPTION_MIN_FONT_SIZE)], SHORT_CAPTION_MIN_FONT_SIZE
+	# 中文口語內容不能默默截字或在詞中斷行，交回語意階段人工切分。
+	raise ValueError("短字幕無安全標點且超過可讀範圍，請在語意編輯階段分句")
 
 
 def _punctuation_only(text: str) -> bool:
@@ -241,12 +248,23 @@ def merge_short_cues(edit: dict, source_start: float, source_end: float) -> list
 
 
 def split_short_text(text: str) -> list[str]:
+	"""只在安全標點後拆 cue；無安全切點時交由字幕檢查要求語意重切。"""
 	text = clean_text(text)
-	if len(wrap_short_zh(text, 76)) <= 2:
+	if not text or _complete_caption_layout(text) is not None:
 		return [text]
-	# 先把可能超過兩行的長 cue 拆成兩個有時間碼的完整片段。
-	parts = max(2, math.ceil(_short_units(text) / 18))
-	chunks = split_text_parts(text, parts, english=False)
+	positions = _caption_break_positions(text)
+	if not positions:
+		return [text]
+	chunks: list[str] = []
+	cursor = 0
+	for position in positions:
+		chunk = text[cursor:position].strip()
+		if chunk:
+			chunks.append(chunk)
+		cursor = position
+	tail = text[cursor:].strip()
+	if tail:
+		chunks.append(tail)
 	return chunks or [text]
 
 

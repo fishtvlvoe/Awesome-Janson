@@ -19,6 +19,7 @@ def load_chapters(path: Path | None, source_end: float) -> list[dict]:
 
 
 NATURAL_END_CHARS = set("。！？；.!?;")
+TRAILING_CLOSING_CHARS = "」』）】〉》〕〗〙〛\"'”’)]}"
 MAX_NATURAL_END_GAP_SECONDS = 0.9
 EPSILON = 0.001
 
@@ -53,7 +54,8 @@ def extend_to_natural_end(
 	while current_index < len(ordered) - 1:
 		current_cue = ordered[current_index]
 		tail = clean_text(current_cue.get("zh"))
-		if tail and tail[-1] in NATURAL_END_CHARS:
+		terminal_tail = tail.rstrip(TRAILING_CLOSING_CHARS)
+		if terminal_tail and terminal_tail[-1] in NATURAL_END_CHARS:
 			break
 		next_cue = ordered[current_index + 1]
 		current_end = float(current_cue.get("source_end", end))
