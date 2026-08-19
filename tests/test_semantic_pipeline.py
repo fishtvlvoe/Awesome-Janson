@@ -115,7 +115,7 @@ class SemanticPipelineTests(unittest.TestCase):
 		self.assertEqual(talking_head_adapter._shorten("這是SEO/BNI/loader", 14), "這是…")
 
 	def test_short_caption_keeps_url_as_a_single_protected_token(self):
-		url = "https://example.com/path/to/resource"
+		url = "https://example.com/path/to/resource?source=shorts&variant=tw"
 		text = "前面" * 10 + "，" + url + "，" + "後面" * 20
 		lines, font_size = render_shorts.fit_short_caption_lines(text)
 		self.assertLessEqual(len(lines), 2)

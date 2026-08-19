@@ -14,7 +14,7 @@ EN_FONT_SIZE = 30
 MAX_TEXT_WIDTH = 1080.0
 MAX_ZH_UNITS = 22
 MAX_EN_CHARS = 60
-ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9@%+._~:/?#\[\]-]*")
+ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9@%+._~:/?#\[\]&=\-]*")
 TRAILING_ASCII_PUNCTUATION = ".,;:!?"
 
 
