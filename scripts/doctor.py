@@ -22,13 +22,13 @@ def check_command(cmd, name, install_mac, install_win):
             print(f"   👉 Windows 安裝指令: {install_win}")
         return False
 
-def check_python_package(pkg, name):
+def check_python_package(pkg, name, install_name=None):
     try:
         __import__(pkg)
         print(f"✅ Python 套件 {name}: 已安裝")
         return True
     except ImportError:
-        print(f"⚠️ Python 套件 {name}: 未安裝 (執行 `pip install {pkg}` 安裝)")
+        print(f"⚠️ Python 套件 {name}: 未安裝 (執行 `pip install {install_name or pkg}` 安裝)")
         return False
 
 def check_ffmpeg_libass():
@@ -58,7 +58,8 @@ def main():
         check_ffmpeg_libass()
 
     print("-" * 50)
-    check_python_package("faster_whisper", "faster-whisper (本地語音辨識)")
+    check_python_package("faster_whisper", "faster-whisper (本地語音辨識)", "faster-whisper")
+    check_python_package("PIL", "Pillow（本地／fal B-roll 畫面）", "Pillow")
 
     print("=" * 50)
     print("✨ 診斷完成！只要 FFmpeg 與 Python 就緒，剪神即可直接開工。")

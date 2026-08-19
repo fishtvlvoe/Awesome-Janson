@@ -143,26 +143,55 @@ def build_events(captions: list[dict], duration: float, include_broll: bool = Tr
 	return events
 
 
-def render_events(events: list[dict], output_dir: Path, fps: int = 30) -> list[dict]:
-	"""產生透明 PNG 序列；回傳給 FFmpeg overlay 使用的事件描述。"""
+def render_events(
+	events: list[dict],
+	output_dir: Path,
+	fps: int = 30,
+	*,
+	broll_provider: str = "local",
+	fal_config: object | None = None,
+	fal_cache_dir: Path | None = None,
+	remote_broll_limit: int = 2,
+	fallback_reason: str | None = None,
+) -> list[dict]:
+	"""產生透明 PNG 序列；fal 遠端失敗時一律退回既有本地 B-roll。"""
 	output_dir = output_dir.resolve()
 	if output_dir.exists():
 		shutil.rmtree(output_dir)
 	output_dir.mkdir(parents=True, exist_ok=True)
 	result: list[dict] = []
+	remote_broll_count = 0
 	for index, event in enumerate(events, start=1):
 		event_dir = output_dir / f"event_{index:02d}_{event['kind']}"
+		metadata: dict = {}
 		if event["kind"] == "broll":
 			from broll_adapter import render as render_broll
 
-			render_broll(
-				"V",
-				event["kind"],
-				event["params"],
-				float(event["duration"]),
-				event_dir,
-				fps=fps,
-			)
+			use_fal = broll_provider in {"fal-image", "fal-video"}
+			if use_fal and fal_config is not None and remote_broll_count < max(0, remote_broll_limit):
+				remote_broll_count += 1
+				try:
+					from fal_broll_provider import FalBrollError, render_fal_broll
+
+					metadata = render_fal_broll(
+						fal_config,
+						event["params"],
+						float(event["duration"]),
+						event_dir,
+						fps=fps,
+						cache_dir=fal_cache_dir,
+					)
+				except FalBrollError as exc:
+					metadata = {"provider": "local", "fallback_from": broll_provider, "fallback_reason": exc.reason}
+					render_broll("V", event["kind"], event["params"], float(event["duration"]), event_dir, fps=fps)
+			else:
+				reason = None
+				if use_fal:
+					reason = fallback_reason or ("remote-broll-limit" if remote_broll_count >= max(0, remote_broll_limit) else "fal-provider-unavailable")
+				metadata = {"provider": "local"}
+				if reason:
+					metadata.update({"fallback_from": broll_provider, "fallback_reason": reason})
+				render_broll("V", event["kind"], event["params"], float(event["duration"]), event_dir, fps=fps)
 		else:
 			anim_lib.render(
 				"V",
@@ -172,5 +201,5 @@ def render_events(events: list[dict], output_dir: Path, fps: int = 30) -> list[d
 				event_dir,
 				fps=fps,
 			)
-		result.append({**event, "frames": str(event_dir), "fps": fps})
+		result.append({**event, **metadata, "frames": str(event_dir), "fps": fps})
 	return result

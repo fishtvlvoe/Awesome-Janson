@@ -1,9 +1,13 @@
+import io
 import json
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest.mock import patch
+
+from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +15,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import apply_review  # noqa: E402
 import broll_adapter  # noqa: E402
+import fal_broll_provider  # noqa: E402
 import render_semantic  # noqa: E402
 import render_shorts  # noqa: E402
 import select_short_segments  # noqa: E402
@@ -377,6 +382,197 @@ class SemanticPipelineTests(unittest.TestCase):
 		for part in parts:
 			self.assertLessEqual(len(wrap_chinese(part["zh"]).split("\\N")), 2)
 			self.assertLessEqual(len(wrap_english(part["en"]).split("\\N")), 2)
+
+	def test_fal_config_reads_local_env_without_exposing_key(self):
+		with tempfile.TemporaryDirectory() as directory:
+			env_file = Path(directory) / "fal.env"
+			env_file.write_text(
+				"FAL_KEY=keep-this-local" + chr(10) + "AWJ_FAL_IMAGE_MODEL=fal-ai/nano-banana-2" + chr(10) + "UNRELATED_KEY=ignore-me" + chr(10),
+				encoding="utf-8",
+			)
+			config = fal_broll_provider.resolve_fal_config(
+				"image",
+				allow_remote=True,
+				env={},
+				env_file=env_file,
+			)
+			self.assertEqual(config.model, "fal-ai/nano-banana-2")
+			self.assertNotIn("keep-this-local", repr(config))
+			self.assertEqual(config.input_overrides, {})
+			override = fal_broll_provider.resolve_fal_config(
+				"image",
+				allow_remote=True,
+				env={"FAL_API_KEY": "runtime-wins"},
+				env_file=env_file,
+			)
+			self.assertEqual(override.api_key, "runtime-wins")
+
+	def test_fal_requires_opt_in_and_video_model(self):
+		with self.assertRaises(fal_broll_provider.FalBrollError) as disabled:
+			fal_broll_provider.resolve_fal_config("image", allow_remote=False, env={"FAL_KEY": "local"})
+		self.assertEqual(disabled.exception.reason, "remote-opt-in-required")
+		with self.assertRaises(fal_broll_provider.FalBrollError) as missing_model:
+			fal_broll_provider.resolve_fal_config("video", allow_remote=True, env={"FAL_KEY": "local"})
+		self.assertEqual(missing_model.exception.reason, "fal-video-model-not-configured")
+
+	def test_fal_queue_download_does_not_send_key_to_media_url(self):
+		class FakeResponse:
+			def __init__(self, body, headers=None):
+				self.stream = io.BytesIO(body)
+				self.headers = headers or {}
+
+			def read(self, size=-1):
+				return self.stream.read(size)
+
+			def __enter__(self):
+				return self
+
+			def __exit__(self, *_args):
+				return False
+
+		with tempfile.TemporaryDirectory() as directory:
+				image = Image.new("RGB", (32, 48), (10, 20, 30))
+				buffer = io.BytesIO()
+				image.save(buffer, format="PNG")
+				png = buffer.getvalue()
+				calls = []
+
+				def fake_urlopen(request, timeout):
+					calls.append((request.full_url, dict(request.header_items()), request.get_method()))
+					if request.full_url.endswith("/status"):
+						return FakeResponse(b'{"status":"COMPLETED"}')
+					if request.full_url.endswith("/requests/request-123"):
+						return FakeResponse(b'{"images":[{"url":"https://fal.media/files/generated.png?signature=temporary"}]}')
+					if request.full_url.startswith("https://fal.media/"):
+						return FakeResponse(png, {"Content-Length": str(len(png)), "Content-Type": "image/png"})
+					return FakeResponse(b'{"request_id":"request-123"}')
+
+				config = fal_broll_provider.FalConfig("image", "fal-ai/flux/schnell", "keep-this-local", timeout_seconds=10)
+				with patch.object(fal_broll_provider, "urlopen", side_effect=fake_urlopen):
+					generated = fal_broll_provider.generate_media(config, {"headline": "合作流程"}, 3.5, Path(directory) / "cache")
+				self.assertTrue(generated.cache_path.is_file())
+				self.assertEqual(generated.request_id, "request-123")
+				queue_headers = calls[0][1]
+				self.assertTrue(any(name.lower() == "authorization" and value == "Key keep-this-local" for name, value in queue_headers.items()))
+				media_headers = next(headers for url, headers, _method in calls if url.startswith("https://fal.media/"))
+				self.assertFalse(any(name.lower() == "authorization" for name in media_headers))
+				self.assertNotIn("signature=temporary", repr(generated))
+				self.assertNotIn("keep-this-local", repr(generated))
+
+	def test_fal_cache_setup_failure_becomes_safe_fallback_error(self):
+		with tempfile.TemporaryDirectory() as directory:
+			cache_file = Path(directory) / "cache-file"
+			cache_file.write_text("not a directory", encoding="utf-8")
+			config = fal_broll_provider.FalConfig("image", "fal-ai/flux/schnell", "keep-this-local", timeout_seconds=10)
+			with self.assertRaisesRegex(fal_broll_provider.FalBrollError, "fal-cache-unavailable"):
+				fal_broll_provider.generate_media(config, {"headline": "合作流程"}, 3.0, cache_file)
+
+	def test_fal_timeout_cancels_pending_queue_work(self):
+		config = fal_broll_provider.FalConfig("image", "fal-ai/flux/schnell", "keep-this-local", timeout_seconds=10)
+		calls = []
+
+		def fake_json_request(method, url, **_kwargs):
+			calls.append((method, url))
+			if method == "POST":
+				return {"request_id": "request-123"}
+			if method == "PUT":
+				return {"status": "CANCELLED"}
+			return {"status": "IN_QUEUE"}
+
+		with patch.object(fal_broll_provider, "_json_request", side_effect=fake_json_request):
+			with patch.object(fal_broll_provider.time, "monotonic", side_effect=(0.0, 11.0)):
+				with self.assertRaisesRegex(fal_broll_provider.FalBrollError, "fal-request-timeout"):
+					fal_broll_provider._queue_result(config, {"prompt": "test"})
+		self.assertIn(
+			("PUT", "https://queue.fal.run/fal-ai/flux/schnell/requests/request-123/cancel"),
+			calls,
+		)
+
+	def test_fal_decompression_bomb_becomes_safe_fallback_error(self):
+		with patch.object(fal_broll_provider.Image, "open", side_effect=Image.DecompressionBombError("too many pixels")):
+			with self.assertRaisesRegex(fal_broll_provider.FalBrollError, "fal-image-media-invalid"):
+				fal_broll_provider._load_image(Path("untrusted-image.png"))
+
+	def test_fal_decompression_bomb_warning_becomes_safe_fallback_error(self):
+		def emit_warning(_path):
+			warnings.warn("too many pixels", Image.DecompressionBombWarning)
+
+		with patch.object(fal_broll_provider.Image, "open", side_effect=emit_warning):
+			with self.assertRaisesRegex(fal_broll_provider.FalBrollError, "fal-image-media-invalid"):
+				fal_broll_provider._load_image(Path("warning-image.png"))
+
+	def test_fal_rejects_oversized_decoded_image_before_copying(self):
+		class OversizedImage:
+			width = 10_000
+			height = 10_000
+
+			def __enter__(self):
+				return self
+
+			def __exit__(self, *_args):
+				return False
+
+		with patch.object(fal_broll_provider.Image, "open", return_value=OversizedImage()):
+			with self.assertRaisesRegex(fal_broll_provider.FalBrollError, "fal-image-media-too-large"):
+				fal_broll_provider._load_image(Path("oversized-image.png"))
+
+	def test_fal_video_frame_compositor_streams_source_images(self):
+		with tempfile.TemporaryDirectory() as directory:
+			root = Path(directory)
+			paths = [root / "one.png", root / "two.png"]
+			Image.new("RGB", (32, 48), (20, 40, 60)).save(paths[0])
+			Image.new("RGB", (32, 48), (80, 100, 120)).save(paths[1])
+			with patch.object(fal_broll_provider, "_load_image", wraps=fal_broll_provider._load_image) as load_image:
+				count = fal_broll_provider._write_composed_frames(paths, 1.0, root / "frames", 3, cache_sources=False)
+			self.assertEqual(count, 3)
+			self.assertEqual(load_image.call_count, 3)
+
+	def test_fal_image_frames_and_remote_failure_fallback_are_manifest_safe(self):
+		with tempfile.TemporaryDirectory() as directory:
+				directory_path = Path(directory)
+				media_path = directory_path / "source.png"
+				Image.new("RGB", (180, 320), (30, 80, 120)).save(media_path)
+				config = fal_broll_provider.FalConfig("image", "fal-ai/flux/schnell", "keep-this-local", timeout_seconds=10)
+				generated = fal_broll_provider.GeneratedMedia("image", config.model, media_path, "request-123", True)
+				cache_dir = directory_path / "final-output" / ".fal-cache"
+				with patch.object(fal_broll_provider, "generate_media", return_value=generated) as generate_media:
+					metadata = fal_broll_provider.render_fal_broll(
+						config,
+						{"headline": "合作流程"},
+						1.0,
+						directory_path / "frames",
+						fps=2,
+						cache_dir=cache_dir,
+					)
+				self.assertEqual(generate_media.call_args.args[3], cache_dir)
+				self.assertEqual(metadata["provider"], "fal-image")
+				self.assertTrue((directory_path / "frames" / "ov_0000.png").is_file())
+				self.assertNotIn("keep-this-local", json.dumps(metadata))
+
+				events = [{"kind": "broll", "start": 1.0, "duration": 2.0, "params": {"headline": "合作流程"}}]
+				with patch.object(fal_broll_provider, "render_fal_broll", return_value={"provider": "fal-image"}) as remote_render:
+					remote = talking_head_adapter.render_events(
+						events,
+						directory_path / "remote",
+						broll_provider="fal-image",
+						fal_config=config,
+						fal_cache_dir=cache_dir,
+					)
+				self.assertEqual(remote[0]["provider"], "fal-image")
+				self.assertEqual(remote_render.call_args.kwargs["cache_dir"], cache_dir)
+
+				with patch.object(fal_broll_provider, "render_fal_broll", side_effect=fal_broll_provider.FalBrollError("fal-network-error")):
+					with patch.object(broll_adapter, "render", return_value=60) as local_render:
+						fallback = talking_head_adapter.render_events(
+							events,
+							directory_path / "fallback",
+							broll_provider="fal-image",
+							fal_config=config,
+						)
+				self.assertEqual(fallback[0]["provider"], "local")
+				self.assertEqual(fallback[0]["fallback_reason"], "fal-network-error")
+				self.assertNotIn("keep-this-local", json.dumps(fallback, ensure_ascii=False))
+				local_render.assert_called_once()
 
 
 if __name__ == "__main__":

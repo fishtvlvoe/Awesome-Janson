@@ -499,7 +499,18 @@ def main() -> None:
 	parser.add_argument("--speed", type=float, default=1.15)
 	parser.add_argument("--style", choices=sorted(PROFILES), default="editorial")
 	parser.add_argument("--animation", choices=("none", "talking-head"), default="none")
-	parser.add_argument("--broll", choices=("none", "local"), default="none", help="local Image2-style context cards")
+	parser.add_argument(
+		"--broll",
+		choices=("none", "local", "fal-image", "fal-video"),
+		default="none",
+		help="local cards, or explicit fal.ai image/video B-roll with local fallback",
+	)
+	parser.add_argument("--allow-remote-broll", action="store_true", help="explicitly allow paid remote fal.ai generation")
+	parser.add_argument("--fal-image-model", help="optional fal image endpoint ID; defaults to fal-ai/flux/schnell")
+	parser.add_argument("--fal-video-model", help="required fal video endpoint ID, for example a /text-to-video endpoint")
+	parser.add_argument("--fal-env-file", type=Path, help="optional dotenv file containing only local fal settings")
+	parser.add_argument("--fal-timeout", type=int, help="per-request fal queue timeout in seconds (10-600)")
+	parser.add_argument("--remote-broll-limit", type=int, default=2, help="maximum remote B-roll events per short (default: 2)")
 	parser.add_argument("--bgm", type=Path, help="optional local BGM file")
 	parser.add_argument("--generate-bgm", action="store_true", help="generate a local synthetic BGM")
 	parser.add_argument("--generate-sfx", action="store_true", help="generate local transition/checklist/stamp sound effects")
@@ -511,6 +522,8 @@ def main() -> None:
 		raise SystemExit("--speed 必須大於 0")
 	if args.limit < 0:
 		raise SystemExit("--limit 不可小於 0")
+	if args.remote_broll_limit < 0:
+		raise SystemExit("--remote-broll-limit 不可小於 0")
 	if args.bgm and args.generate_bgm:
 		raise SystemExit("--bgm 與 --generate-bgm 不可同時使用")
 	edit = json.loads(args.edit.read_text(encoding="utf-8"))
@@ -529,6 +542,28 @@ def main() -> None:
 			], check=True)
 	if bgm_path and not bgm_path.is_file():
 		raise SystemExit(f"BGM 不存在：{bgm_path}")
+	fal_config = None
+	fal_fallback_reason = None
+	if args.broll in {"fal-image", "fal-video"}:
+		try:
+			from fal_broll_provider import FalBrollError, resolve_fal_config
+		except ImportError:
+			# 未安裝 Pillow 等選用渲染依賴時不影響非 fal 的既有短片流程。
+			fal_fallback_reason = "fal-render-dependency-unavailable"
+		else:
+			try:
+				fal_config = resolve_fal_config(
+					"image" if args.broll == "fal-image" else "video",
+					allow_remote=args.allow_remote_broll,
+					image_model=args.fal_image_model,
+					video_model=args.fal_video_model,
+					timeout_seconds=args.fal_timeout,
+					env_file=args.fal_env_file,
+				)
+			except FalBrollError as exc:
+				fal_fallback_reason = exc.reason
+		if fal_fallback_reason:
+			print(f"⚠️ fal B-roll 未啟用，改用 local：{fal_fallback_reason}")
 	outputs: list[dict] = []
 	segments = segment_payload.get("segments", [])
 	if args.limit:
@@ -549,14 +584,26 @@ def main() -> None:
 			output_duration,
 			args.cta,
 		)
-		use_talking_head = args.animation == "talking-head" or args.broll == "local"
+		use_talking_head = args.animation == "talking-head" or args.broll != "none"
 		animation_events = (
-			build_events(captions, output_duration, include_broll=args.broll == "local")
+			build_events(captions, output_duration, include_broll=args.broll != "none")
 			if use_talking_head
 			else []
 		)
 		animation_dir = args.output_dir / f".talking-head-{int(segment['id']):02d}"
-		rendered_events = render_events(animation_events, animation_dir) if args.render and animation_events else []
+		rendered_events = (
+			render_events(
+				animation_events,
+				animation_dir,
+				broll_provider=args.broll if args.broll in {"fal-image", "fal-video"} else "local",
+				fal_config=fal_config,
+				fal_cache_dir=args.output_dir / ".fal-cache",
+				remote_broll_limit=args.remote_broll_limit,
+				fallback_reason=fal_fallback_reason,
+			)
+			if args.render and animation_events
+			else []
+		)
 		sfx_path = None
 		if args.generate_sfx and args.render and rendered_events:
 			sfx_path = args.output_dir / f"short_{int(segment['id']):02d}_sfx.wav"
@@ -597,10 +644,16 @@ def main() -> None:
 	manifest = {
 		"schema_version": 1,
 		"tool": "awesome-janson",
-		"mode": "shorts-master+talking-head-video-cut-local",
+		"mode": "shorts-master+talking-head-video-cut",
 		"style": args.style,
 		"animation": args.animation,
 		"broll": args.broll,
+		"fal": {
+			"remote_opt_in": bool(args.allow_remote_broll),
+			"model": fal_config.model if fal_config else None,
+			"fallback_reason": fal_fallback_reason,
+			"remote_broll_limit": args.remote_broll_limit,
+		},
 		"speed": args.speed,
 		"bgm": str(bgm_path) if bgm_path else None,
 		"sfx": bool(args.generate_sfx),
