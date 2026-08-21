@@ -8,7 +8,7 @@
 - `motion-design/` — LottieFiles motion design 方法論；短片與長片的動效決策共用。
 - `talking-head-video-cut/` — MIT 授權的本機口播引擎參考與動畫元件；剪神 adapter 會使用其 checklist／stamp 元件，不直接使用硬編碼 Windows 主流程。
 - `moneyprinterturbo/` — optional 主題／腳本成片 provider，只保留 Agent Skill 與安裝 helper，不 vendoring 完整 345MB 應用程式。
-- `hyperframes-renderkit/` — optional HyperFrames deterministic renderer provider；只保留剪神路由與安全邊界，不 vendoring upstream Electron／Chromium runtime。
+- `hyperframes/` — optional HyperFrames 本機 HTML-to-video provider；支援 `npx hyperframes` 與各種 coding agents。
 - `../scripts/fal_broll_provider.py` — optional fal.ai queue adapter；不 vendoring SDK，使用標準 HTTP queue API，輸出仍回到既有 PNG overlay contract。
 
 ## 全域已安裝的動畫技能
@@ -26,7 +26,7 @@
 - **圖片 optional**：OpenAI Images、Gemini／Imagen、FLUX、Stable Image、ComfyUI。
 - **圖像／影片 optional**：fal.ai Marketplace endpoint（`fal-image`／`fal-video`）已接入；Runway、Veo、Kling、Luma、Pika 或本地 ComfyUI 工作流仍可後續擴充。
 - **主題成片 optional**：MoneyPrinterTurbo，負責主題／腳本 → 旁白、素材與成片。
-- **HyperFrames 渲染 optional**：HyperFrames-RenderKit，負責 Linux x86_64 上的確定性 HyperFrames delivery；必須先通過 `check`／`plan`，不取代既有 FFmpeg fallback。
+- **HyperFrames 渲染 optional**：HyperFrames CLI，負責 HTML／CSS／JS 動態影片；可在 macOS、Windows、Linux 本機使用，沒有 CLI 時不影響既有 FFmpeg fallback。
 
 這些 provider 不是剪神主要功能；沒有設定 API 或模型時，一律回退本地 FFmpeg／PIL／Remotion 路線。完整狀態與設定約定見 `../docs/broll-providers.md`。
 
