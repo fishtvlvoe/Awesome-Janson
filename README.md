@@ -145,7 +145,7 @@ python3 scripts/render_shorts.py semantic_full/semantic_edit.json shorts/short_s
   --cta "追蹤剪神" --render
 ```
 
-短影音片審規則固定在 `prompts/shorts-review.md`：中文市場預設只顯示繁中、字幕先合併碎句、每 6～8 秒有視覺事件、三支短片共用第一版 B-roll／動畫／BGM／音效／CTA 模板但各自帶出不同重點。`--broll local` 是不依賴外部 API 的 Image2-style 情境圖卡 fallback；外部 AI B-roll、素材搜尋與臉部保真服務仍是可選 provider，沒有服務時仍可完成本地短片輸出。完整 provider 選項與模型串接方式見 [`docs/broll-providers.md`](docs/broll-providers.md)。
+短影音片審規則固定在 `prompts/shorts-review.md`：中文市場預設只顯示繁中、字幕先合併碎句、每 6～8 秒有視覺事件、三支短片共用第一版 B-roll／動畫／BGM／音效／CTA 模板但各自帶出不同重點。`--broll local` 是不依賴外部 API 的 Image2-style 情境圖卡 fallback；外部 AI B-roll、素材搜尋與臉部保真服務仍是可選 provider，沒有服務時仍可完成本地短片輸出。完整 provider 選項與模型串接方式見 [`docs/broll-providers.md`](docs/broll-providers.md)；文字 → 本地動態圖卡／生圖鏡頭動畫／文字生影片與未來 image-to-video 的分層流程見 [`docs/text-to-dynamic-broll.md`](docs/text-to-dynamic-broll.md)。
 
 ### 🧩 fal.ai B-roll（選用）
 

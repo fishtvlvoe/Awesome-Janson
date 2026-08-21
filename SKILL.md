@@ -126,7 +126,7 @@ python3 scripts/doctor.py
 - ChatGPT／Codex／Claude Code／Kimi 網頁訂閱通常不能直接代替第三方 API key。
 - API key 不寫入 skill、git 或 log；fal remote 呼叫必須同時有 `FAL_KEY` 與 `--allow-remote-broll`，缺少 key、影片模型或遠端失敗時必須退回本地路線。
 - fal 下載媒體只作無音軌 overlay，原始口白與字幕最後一層不變；manifest 不得記錄 key 或簽名 URL。
-- Provider 類型、設定名稱與目前完成度見 `docs/broll-providers.md`。
+- Provider 類型、設定名稱與目前完成度見 `docs/broll-providers.md`；文字 → 本地動態圖卡／生圖鏡頭動畫／文字生影片與未來 image-to-video 的分層規則見 `docs/text-to-dynamic-broll.md`。
 
 ---
 

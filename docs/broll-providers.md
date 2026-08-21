@@ -24,7 +24,7 @@
 
 ## 模型串接方式
 
-模型不直接取代剪神的時間軸。建議採用：
+模型不直接取代剪神的時間軸。完整的「文字 → 圖片／動態影片 B-roll」分層、成本確認與 image-to-video 規劃見 [`text-to-dynamic-broll.md`](text-to-dynamic-broll.md)。建議採用：
 
 ```text
 逐字稿／主題
