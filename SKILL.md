@@ -80,6 +80,7 @@ description: "【剪神 / Awesome-Janson】全能 AI 影片剪輯 Agent。支援
 | `motion-design` | 情緒、時序、easing、choreography 與 QA 原則 | 短片標題／字幕動畫與長片章節卡共用 |
 | `video-shotcraft` | Remotion 電影感鏡頭卡、2.5D、轉場與聲音設計 | 產品宣傳片與進階動效 provider |
 | `HyperFrames`／`GSAP`／`Remotion` | 字卡、時間軸、字幕與程式動畫實作規範 | 產生動效工程時由 Agent 路由載入 |
+| `HyperFrames-RenderKit` | Linux x86_64 的 deterministic HyperFrames 渲染、interval routing、最終檔案驗證 | `scripts/hyperframes_renderkit_provider.py` optional provider；不取代 FFmpeg／PIL／Remotion fallback |
 | `Pixel2Motion` | Logo／品牌開場動畫 | Logo reveal provider |
 | `story-to-handdrawn-video` | 中文故事手繪動畫 | 故事型短片 provider |
 | `LottieFiles motion-design` | 通用 motion design 方法論 | 已安裝至全域 Skill SSOT，並同步保留在 `integrations/motion-design/` |
@@ -89,6 +90,17 @@ description: "【剪神 / Awesome-Janson】全能 AI 影片剪輯 Agent。支援
 | AI 生圖／圖生影片 | OpenAI Images、Gemini／Imagen、FLUX、Runway、Veo、Kling、Luma 等 | optional provider 設計；fal.ai queue adapter 已可用，其餘不作核心硬依賴 |
 
 短片與長片共用語意 JSON、word-level 時間軸與字幕布局；長片使用 `render_full.py`，短片使用 `render_shorts.py`。B-roll／模型 provider 的完整擴充矩陣見 `docs/broll-providers.md`；這些都是 optional，不是剪神核心依賴。
+
+HyperFrames 專案若需要 deterministic delivery，可明確選用 RenderKit provider：
+
+```bash
+export AWJ_HYPERFRAMES_RENDERKIT_ROOT=/opt/HyperFrames-RenderKit
+python3 scripts/hyperframes_renderkit_provider.py check /path/to/hyperframes-project
+python3 scripts/hyperframes_renderkit_provider.py plan /path/to/hyperframes-project --config /path/to/delivery.json
+python3 scripts/hyperframes_renderkit_provider.py run /path/to/hyperframes-project --config /path/to/delivery.json
+```
+
+RenderKit 是 Linux x86_64 專用 optional runtime；沒有設定或不符合平台時，剪神既有 FFmpeg／PIL／Remotion 路線維持不變。整合邊界與 upstream 建置要求見 [`integrations/hyperframes-renderkit/README.md`](integrations/hyperframes-renderkit/README.md)。
 
 ### MoneyPrinterTurbo 路由規則
 

@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-green.svg)]()
 
-「剪神 (Awesome-Janson)」是專為現代創作者、講師與開發者打造的 **AI 影片剪輯全能 Agent**。目前已完成長片語意精修、`shorts-master` 與 `talking-head-video-cut` 本地短影音 adapter；電影級 **`video-shotcraft`**、Pixel2Motion、GSAP、Remotion 與 LottieFiles motion-design 作為進階動畫技能路由。
+「剪神 (Awesome-Janson)」是專為現代創作者、講師與開發者打造的 **AI 影片剪輯全能 Agent**。目前已完成長片語意精修、`shorts-master` 與 `talking-head-video-cut` 本地短影音 adapter；電影級 **`video-shotcraft`**、Pixel2Motion、GSAP、Remotion 與 LottieFiles motion-design 作為進階動畫技能路由。HyperFrames 專案另可選用 Linux x86_64 的 [`HyperFrames-RenderKit`](https://github.com/xiaotianfotos/HyperFrames-RenderKit) deterministic provider，既有 FFmpeg 路線不受影響。
 
 
 ---
