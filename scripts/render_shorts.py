@@ -74,6 +74,14 @@ SHORT_CAPTION_FONT_SIZE = 76
 SHORT_CAPTION_MIN_FONT_SIZE = 42
 TAIL_PAD_SECONDS = 0.65
 SHORT_TERMINAL_CHARS = set("。！？；：.!?;:")
+
+
+def validate_remote_broll_seconds(provider: str, seconds: float) -> float:
+	if not 1.0 <= seconds <= 6.0:
+		raise ValueError("--remote-broll-seconds 必須介於 1 至 6")
+	if provider == "fal-image-to-video" and seconds > 2.0:
+		raise ValueError("--broll fal-image-to-video 的 --remote-broll-seconds 最多 2 秒")
+	return seconds
 SHORT_BREAK_CHARS = SHORT_TERMINAL_CHARS | set("，、,.:")
 SHORT_CLOSING_CHARS = set("」』）】〉》〕〗〙〛\"'”’)]}")
 
@@ -501,16 +509,17 @@ def main() -> None:
 	parser.add_argument("--animation", choices=("none", "talking-head"), default="none")
 	parser.add_argument(
 		"--broll",
-		choices=("none", "local", "fal-image", "fal-video"),
+		choices=("none", "local", "fal-image", "fal-video", "fal-image-to-video"),
 		default="none",
-		help="local cards, or explicit fal.ai image/video B-roll with local fallback",
+		help="local cards, or explicit fal.ai image/video/image-to-video B-roll with local fallback",
 	)
 	parser.add_argument("--allow-remote-broll", action="store_true", help="explicitly allow paid remote fal.ai generation")
 	parser.add_argument("--fal-image-model", help="optional fal image endpoint ID; defaults to fal-ai/flux/schnell")
-	parser.add_argument("--fal-video-model", help="required fal video endpoint ID, for example a /text-to-video endpoint")
+	parser.add_argument("--fal-video-model", help="required fal video endpoint ID, for example a /text-to-video or /image-to-video endpoint")
 	parser.add_argument("--fal-env-file", type=Path, help="optional dotenv file containing only local fal settings")
 	parser.add_argument("--fal-timeout", type=int, help="per-request fal queue timeout in seconds (10-600)")
 	parser.add_argument("--remote-broll-limit", type=int, default=2, help="maximum remote B-roll events per short (default: 2)")
+	parser.add_argument("--remote-broll-seconds", type=float, default=2.0, help="visible seconds per fal image-to-video event (1-6; default: 2)")
 	parser.add_argument("--bgm", type=Path, help="optional local BGM file")
 	parser.add_argument("--generate-bgm", action="store_true", help="generate a local synthetic BGM")
 	parser.add_argument("--generate-sfx", action="store_true", help="generate local transition/checklist/stamp sound effects")
@@ -524,6 +533,10 @@ def main() -> None:
 		raise SystemExit("--limit 不可小於 0")
 	if args.remote_broll_limit < 0:
 		raise SystemExit("--remote-broll-limit 不可小於 0")
+	try:
+		args.remote_broll_seconds = validate_remote_broll_seconds(args.broll, args.remote_broll_seconds)
+	except ValueError as exc:
+		raise SystemExit(str(exc)) from exc
 	if args.bgm and args.generate_bgm:
 		raise SystemExit("--bgm 與 --generate-bgm 不可同時使用")
 	edit = json.loads(args.edit.read_text(encoding="utf-8"))
@@ -544,22 +557,31 @@ def main() -> None:
 		raise SystemExit(f"BGM 不存在：{bgm_path}")
 	fal_config = None
 	fal_fallback_reason = None
-	if args.broll in {"fal-image", "fal-video"}:
+	if args.broll in {"fal-image", "fal-video", "fal-image-to-video"}:
 		try:
-			from fal_broll_provider import FalBrollError, resolve_fal_config
+			from fal_broll_provider import FalBrollError, resolve_fal_config, resolve_fal_image_to_video_config
 		except ImportError:
 			# 未安裝 Pillow 等選用渲染依賴時不影響非 fal 的既有短片流程。
 			fal_fallback_reason = "fal-render-dependency-unavailable"
 		else:
 			try:
-				fal_config = resolve_fal_config(
-					"image" if args.broll == "fal-image" else "video",
-					allow_remote=args.allow_remote_broll,
-					image_model=args.fal_image_model,
-					video_model=args.fal_video_model,
-					timeout_seconds=args.fal_timeout,
-					env_file=args.fal_env_file,
-				)
+				if args.broll == "fal-image-to-video":
+					fal_config = resolve_fal_image_to_video_config(
+						allow_remote=args.allow_remote_broll,
+						image_model=args.fal_image_model,
+						video_model=args.fal_video_model,
+						timeout_seconds=args.fal_timeout,
+						env_file=args.fal_env_file,
+					)
+				else:
+					fal_config = resolve_fal_config(
+						"image" if args.broll == "fal-image" else "video",
+						allow_remote=args.allow_remote_broll,
+						image_model=args.fal_image_model,
+						video_model=args.fal_video_model,
+						timeout_seconds=args.fal_timeout,
+						env_file=args.fal_env_file,
+					)
 			except FalBrollError as exc:
 				fal_fallback_reason = exc.reason
 		if fal_fallback_reason:
@@ -586,7 +608,12 @@ def main() -> None:
 		)
 		use_talking_head = args.animation == "talking-head" or args.broll != "none"
 		animation_events = (
-			build_events(captions, output_duration, include_broll=args.broll != "none")
+			build_events(
+				captions,
+				output_duration,
+				include_broll=args.broll != "none",
+				broll_duration=args.remote_broll_seconds if args.broll == "fal-image-to-video" else None,
+			)
 			if use_talking_head
 			else []
 		)
@@ -595,7 +622,7 @@ def main() -> None:
 			render_events(
 				animation_events,
 				animation_dir,
-				broll_provider=args.broll if args.broll in {"fal-image", "fal-video"} else "local",
+				broll_provider=args.broll if args.broll in {"fal-image", "fal-video", "fal-image-to-video"} else "local",
 				fal_config=fal_config,
 				fal_cache_dir=args.output_dir / ".fal-cache",
 				remote_broll_limit=args.remote_broll_limit,
@@ -650,9 +677,12 @@ def main() -> None:
 		"broll": args.broll,
 		"fal": {
 			"remote_opt_in": bool(args.allow_remote_broll),
-			"model": fal_config.model if fal_config else None,
+			"model": fal_config.model if fal_config and hasattr(fal_config, "model") else None,
+			"image_model": getattr(getattr(fal_config, "image", None), "model", None),
+			"video_model": getattr(getattr(fal_config, "video", None), "model", None),
 			"fallback_reason": fal_fallback_reason,
 			"remote_broll_limit": args.remote_broll_limit,
+			"remote_broll_seconds": args.remote_broll_seconds if args.broll == "fal-image-to-video" else None,
 		},
 		"speed": args.speed,
 		"bgm": str(bgm_path) if bgm_path else None,

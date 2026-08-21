@@ -407,13 +407,85 @@ class SemanticPipelineTests(unittest.TestCase):
 			)
 			self.assertEqual(override.api_key, "runtime-wins")
 
+	def test_image_to_video_visible_duration_is_limited_to_two_seconds(self):
+		self.assertEqual(render_shorts.validate_remote_broll_seconds("fal-image-to-video", 2.0), 2.0)
+		with self.assertRaisesRegex(ValueError, "最多 2 秒"):
+			render_shorts.validate_remote_broll_seconds("fal-image-to-video", 2.1)
+		self.assertEqual(render_shorts.validate_remote_broll_seconds("fal-video", 6.0), 6.0)
+
+	def test_fal_gpt_image_two_and_image_to_video_config_are_provider_local(self):
+		with tempfile.TemporaryDirectory() as directory:
+			env_file = Path(directory) / "empty-fal.env"
+			env_file.write_text("", encoding="utf-8")
+			config = fal_broll_provider.resolve_fal_image_to_video_config(
+				allow_remote=True,
+				env={
+					"FAL_KEY": "keep-this-local",
+					"AWJ_FAL_IMAGE_MODEL": "openai/gpt-image-2",
+					"AWJ_FAL_VIDEO_MODEL": "fal-ai/kling-video/o3/standard/image-to-video",
+				},
+				env_file=env_file,
+			)
+			self.assertEqual(config.image.model, "openai/gpt-image-2")
+			self.assertEqual(config.video.model, "fal-ai/kling-video/o3/standard/image-to-video")
+			self.assertNotIn("keep-this-local", repr(config))
+			self.assertEqual(
+				fal_broll_provider._image_arguments(config.image, "prompt"),
+				{
+					"prompt": "prompt",
+					"image_size": "portrait_16_9",
+					"quality": "medium",
+					"num_images": 1,
+					"output_format": "jpeg",
+				},
+			)
+			prompt = fal_broll_provider.build_contextual_image_prompt({"headline": "一般引薦", "body": "理想引薦是什麼？"})
+			self.assertIn("exchanging a blank unbranded business card", prompt)
+			self.assertIn("No readable text", prompt)
+			self.assertIn("Do not add readable text", fal_broll_provider.build_image_to_video_prompt({"headline": "一般引薦"}))
+
+	def test_fal_image_to_video_passes_ephemeral_image_url_without_persisting_it(self):
+		config = fal_broll_provider.FalImageToVideoConfig(
+			fal_broll_provider.FalConfig("image", "openai/gpt-image-2", "keep-this-local", timeout_seconds=10),
+			fal_broll_provider.FalConfig("video", "fal-ai/kling-video/o3/standard/image-to-video", "keep-this-local", timeout_seconds=10),
+		)
+		with tempfile.TemporaryDirectory() as directory:
+			queue_calls = []
+
+			def fake_queue(current_config, arguments):
+				queue_calls.append((current_config.mode, arguments))
+				if current_config.mode == "image":
+					return "image-request", {"images": [{"url": "https://fal.media/files/source.jpg?signature=temporary"}]}
+				return "video-request", {"video": {"url": "https://fal.media/files/video.mp4?signature=temporary"}}
+
+			def fake_download(_url, destination, _kind, _timeout):
+				destination.write_bytes(b"video")
+
+			with patch.object(fal_broll_provider, "_queue_result", side_effect=fake_queue), patch.object(
+				fal_broll_provider, "_download_media", side_effect=fake_download
+			):
+				generated = fal_broll_provider.generate_image_to_video_media(
+					config, {"headline": "介紹夥伴"}, 1.5, Path(directory) / "cache"
+				)
+			self.assertEqual(generated.kind, "video")
+			self.assertTrue(generated.cache_path.is_file())
+			self.assertEqual(queue_calls[1][1]["image_url"], "https://fal.media/files/source.jpg?signature=temporary")
+			self.assertEqual(queue_calls[1][1]["duration"], "3")
+			self.assertFalse(queue_calls[1][1]["generate_audio"])
+			self.assertNotIn("aspect_ratio", queue_calls[1][1])  # Kling O3 以 portrait GPT 首幀比例為準，schema 不接受此欄位。
+			self.assertNotIn("signature=temporary", repr(generated))
+			self.assertNotIn("keep-this-local", repr(generated))
+
 	def test_fal_requires_opt_in_and_video_model(self):
-		with self.assertRaises(fal_broll_provider.FalBrollError) as disabled:
-			fal_broll_provider.resolve_fal_config("image", allow_remote=False, env={"FAL_KEY": "local"})
-		self.assertEqual(disabled.exception.reason, "remote-opt-in-required")
-		with self.assertRaises(fal_broll_provider.FalBrollError) as missing_model:
-			fal_broll_provider.resolve_fal_config("video", allow_remote=True, env={"FAL_KEY": "local"})
-		self.assertEqual(missing_model.exception.reason, "fal-video-model-not-configured")
+		with tempfile.TemporaryDirectory() as directory:
+			env_file = Path(directory) / "empty-fal.env"
+			env_file.write_text("", encoding="utf-8")
+			with self.assertRaises(fal_broll_provider.FalBrollError) as disabled:
+				fal_broll_provider.resolve_fal_config("image", allow_remote=False, env={"FAL_KEY": "local"}, env_file=env_file)
+			self.assertEqual(disabled.exception.reason, "remote-opt-in-required")
+			with self.assertRaises(fal_broll_provider.FalBrollError) as missing_model:
+				fal_broll_provider.resolve_fal_config("video", allow_remote=True, env={"FAL_KEY": "local"}, env_file=env_file)
+			self.assertEqual(missing_model.exception.reason, "fal-video-model-not-configured")
 
 	def test_fal_queue_download_does_not_send_key_to_media_url(self):
 		class FakeResponse:
@@ -466,6 +538,29 @@ class SemanticPipelineTests(unittest.TestCase):
 			config = fal_broll_provider.FalConfig("image", "fal-ai/flux/schnell", "keep-this-local", timeout_seconds=10)
 			with self.assertRaisesRegex(fal_broll_provider.FalBrollError, "fal-cache-unavailable"):
 				fal_broll_provider.generate_media(config, {"headline": "合作流程"}, 3.0, cache_file)
+
+	def test_fal_queue_uses_safe_server_returned_queue_urls(self):
+		config = fal_broll_provider.FalConfig("image", "openai/gpt-image-2", "keep-this-local", timeout_seconds=10)
+		calls = []
+
+		def fake_json_request(method, url, **_kwargs):
+			calls.append((method, url))
+			if method == "POST":
+				return {
+					"request_id": "request-123",
+					"status_url": "https://queue.fal.run/custom/status",
+					"response_url": "https://queue.fal.run/custom/result",
+					"cancel_url": "https://queue.fal.run/custom/cancel",
+				}
+			if url.endswith("/status"):
+				return {"status": "COMPLETED"}
+			return {"images": []}
+
+		with patch.object(fal_broll_provider, "_json_request", side_effect=fake_json_request):
+			request_id, _payload = fal_broll_provider._queue_result(config, {"prompt": "test"})
+		self.assertEqual(request_id, "request-123")
+		self.assertIn(("GET", "https://queue.fal.run/custom/status"), calls)
+		self.assertIn(("GET", "https://queue.fal.run/custom/result"), calls)
 
 	def test_fal_timeout_cancels_pending_queue_work(self):
 		config = fal_broll_provider.FalConfig("image", "fal-ai/flux/schnell", "keep-this-local", timeout_seconds=10)
@@ -526,6 +621,24 @@ class SemanticPipelineTests(unittest.TestCase):
 				count = fal_broll_provider._write_composed_frames(paths, 1.0, root / "frames", 3, cache_sources=False)
 			self.assertEqual(count, 3)
 			self.assertEqual(load_image.call_count, 3)
+
+	def test_fal_image_to_video_renderer_keeps_manifest_metadata_safe(self):
+		config = fal_broll_provider.FalImageToVideoConfig(
+			fal_broll_provider.FalConfig("image", "openai/gpt-image-2", "keep-this-local", timeout_seconds=10),
+			fal_broll_provider.FalConfig("video", "fal-ai/kling-video/o3/standard/image-to-video", "keep-this-local", timeout_seconds=10),
+		)
+		generated = fal_broll_provider.GeneratedMedia("video", config.video.model, Path("cached.mp4"), "video-request", False)
+		with tempfile.TemporaryDirectory() as directory:
+			with patch.object(fal_broll_provider, "generate_image_to_video_media", return_value=generated), patch.object(
+				fal_broll_provider, "_render_video_media", return_value=60
+			):
+				metadata = fal_broll_provider.render_fal_image_to_video_broll(
+					config, {"headline": "介紹夥伴"}, 2.0, Path(directory) / "frames"
+				)
+			self.assertEqual(metadata["provider"], "fal-image-to-video")
+			self.assertEqual(metadata["image_model"], "openai/gpt-image-2")
+			self.assertEqual(metadata["model"], "fal-ai/kling-video/o3/standard/image-to-video")
+			self.assertNotIn("keep-this-local", json.dumps(metadata))
 
 	def test_fal_image_frames_and_remote_failure_fallback_are_manifest_safe(self):
 		with tempfile.TemporaryDirectory() as directory:

@@ -44,19 +44,17 @@ cue → provider-neutral prompt → fal text-to-video queue → 無音軌影片 
 - 每段只生成 3–6 秒，且 `--remote-broll-limit` 預設為 2。
 - 只用於需要真正鏡頭運動、物件運動或 cinematic 氛圍的少數重點段落；不使用模型輸出的音軌。
 
-### D. 圖片 → 動態影片（規劃中，尚未宣告 CLI 可用）
+### D. 文字 → GPT Image 2 → 動態影片（現在可用，需成本確認）
 
 ```text
-approved image → upload to an image-to-video endpoint → motion prompt → 無音軌影片 overlay
+cue → fal openai/gpt-image-2 → fal image-to-video endpoint → 無音軌影片 overlay
 ```
 
-未來採用此路線時必須：
-
-1. 保留原圖與 provider 的非敏感 request metadata 在輸出目錄 cache；不得寫入 key 或簽名 URL。
-2. 明確選擇支援 image-to-video 的 endpoint，並先取得該 endpoint 的 input schema、輸出秒數和成本估算。
-3. 先用一個 3–6 秒鏡頭人工片審，再允許批次生成。
-4. 上傳來源圖前取得使用者同意；含人物、客戶素材或商標時，需確認授權與 provider 條款。
-5. queue／下載／解碼失敗或超時時取消遠端工作並回退 B 路線或 A 路線。
+- 使用 `--broll fal-image-to-video --allow-remote-broll`。
+- `openai/gpt-image-2` 是 fal 的 partner endpoint，只需 `FAL_KEY`，**不需要** `OPENAI_API_KEY`。
+- 第一張圖片回傳的暫時 fal URL 只在記憶體中傳給 image-to-video queue；不寫入 cache、manifest 或 log。
+- 現行首選影片 endpoint 為 `fal-ai/kling-video/o3/standard/image-to-video`。它最少生成 3 秒，但剪神預設只取前 2 秒插回口播。
+- 必須先確認 endpoint、生成秒數、單價和遠端事件數；queue／下載／解碼失敗或超時時取消遠端工作並回退本地 B 路線或 A 路線。
 
 ## Provider-neutral `scene_plan.json`
 
@@ -82,7 +80,7 @@ LLM 輸出只能描述既有口白，禁止虛構數字、成果或客戶背書�
 | 流程、概念、課程重點 | A | 預設；最快且完全本地 |
 | 情境插圖、品牌氛圍 | B | 只生成少量靜態圖，讓本地鏡頭動畫承接 |
 | 真正的人物／物件／鏡頭運動 | C | 只用 1–2 個重點鏡頭，先確認成本與片審 |
-| 已核准主視覺需要延伸動態 | D | 等 image-to-video adapter 和 endpoint 成本核對完成後再使用 |
+| 需要自然人物情境、遞名片、介紹或短鏡頭動作 | D | 先用 1–2 個 2 秒插鏡；影片模型最少生成秒數仍依 provider 計費 |
 
 ## 執行範例
 
@@ -105,6 +103,23 @@ python3 scripts/render_shorts.py edit.json segments.json \
   --source input.mp4 --output-dir shorts/fal-video \
   --animation talking-head --broll fal-video \
   --allow-remote-broll --remote-broll-limit 1 --render
+
+# D：fal GPT Image 2 → Kling O3 image-to-video；每段只在時間軸顯示 2 秒
+AWJ_FAL_IMAGE_MODEL=openai/gpt-image-2 \
+AWJ_FAL_VIDEO_MODEL=fal-ai/kling-video/o3/standard/image-to-video \
+python3 scripts/render_shorts.py edit.json segments.json \
+  --source input.mp4 --output-dir shorts/fal-image-to-video \
+  --animation talking-head --broll fal-image-to-video \
+  --allow-remote-broll --remote-broll-limit 2 --remote-broll-seconds 2 --render
 ```
 
-`fal-video` 或未來 image-to-video 的實際呼叫前，操作 Agent 必須向使用者說明模型、預估費用和鏡頭數量並取得確認；未設定 key、模型或 opt-in 時，剪神必須輸出 A 路線的本地 fallback。
+`fal-video` 與 `fal-image-to-video` 的實際呼叫前，操作 Agent 必須向使用者說明模型、預估費用和鏡頭數量並取得確認；未設定 key、模型或 opt-in 時，剪神必須輸出 A 路線的本地 fallback。
+
+## 未來 Optional Provider：ElevenLabs 真人口播與音訊
+
+此項目只記錄產品方向，**目前不是剪神既有 render pipeline 的依賴或已啟用功能**：
+
+- 保留現場真人口播為預設，只做節奏剪輯、降噪、BGM 與 SFX；不自動以 AI 聲音取代講者。
+- 若有已授權的聲音與腳本，未來可用 ElevenLabs 做補錄句、改稿配音、多語配音與配樂／音效。
+- 需要 `ELEVENLABS_API_KEY`，且 voice clone 必須先有當事人的明確授權與使用範圍紀錄。
+- AI 影片模型的原生音訊仍預設關閉，避免覆蓋原始口播或授權配音。

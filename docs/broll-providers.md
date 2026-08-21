@@ -77,6 +77,14 @@ python3 scripts/render_shorts.py edit.json segments.json \
   --source input.mp4 --output-dir shorts \
   --broll fal-image --allow-remote-broll --remote-broll-limit 2 --render
 
+# fal 的 GPT Image 2 → Kling image-to-video：只需 FAL_KEY，無須 OPENAI_API_KEY。
+AWJ_FAL_IMAGE_MODEL=openai/gpt-image-2 \
+AWJ_FAL_VIDEO_MODEL=fal-ai/kling-video/o3/standard/image-to-video \
+python3 scripts/render_shorts.py edit.json segments.json \
+  --source input.mp4 --output-dir shorts \
+  --broll fal-image-to-video --allow-remote-broll \
+  --remote-broll-limit 2 --remote-broll-seconds 2 --render
+
 # fal 影片 B-roll：需自行選擇目前可用的文字轉影片 endpoint。
 AWJ_FAL_VIDEO_MODEL=fal-ai/kling-video/v3/standard/text-to-video \
 python3 scripts/render_shorts.py edit.json segments.json \
@@ -93,9 +101,9 @@ python3 scripts/moneyprinterturbo_provider.py --subject "你的主題"
 
 ```bash
 FAL_KEY=你的_fal_key
-# fal-image 預設為 fal-ai/flux/schnell；可在 dashboard 換成其他相容 endpoint。
+# fal-image 預設為 fal-ai/flux/schnell；GPT Image 2 可設為 openai/gpt-image-2，仍只需要 FAL_KEY。
 AWJ_FAL_IMAGE_MODEL=
-# fal-video 沒有預設，避免意外選到高成本模型；請明確填入 /text-to-video endpoint。
+# fal-video 沒有預設，避免意外選到高成本模型；可填 /text-to-video 或 /image-to-video endpoint。
 AWJ_FAL_VIDEO_MODEL=
 # 選用：不同模型的額外欄位，只接受 JSON object。
 # AWJ_FAL_IMAGE_INPUT_JSON={"output_format":"jpeg"}

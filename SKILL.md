@@ -85,7 +85,7 @@ description: "【剪神 / Awesome-Janson】全能 AI 影片剪輯 Agent。支援
 | `LottieFiles motion-design` | 通用 motion design 方法論 | 已安裝至全域 Skill SSOT，並同步保留在 `integrations/motion-design/` |
 | `MoneyPrinterTurbo` | 主題／腳本 → TTS、素材、BGM、成片 | 只作 optional topic-video provider；不取代既有錄影的語意剪輯 |
 | `Pexels`／`Pixabay` | 真實情境 B-roll 素材 | optional；需各自 API／授權，沒有設定時回退 local |
-| `fal.ai` | Marketplace 圖片與文字轉影片 B-roll | `--broll fal-image`／`fal-video` 加 `--allow-remote-broll`；缺 key／模型／遠端失敗回退 local |
+| `fal.ai` | Marketplace 圖片、文字轉影片與 GPT Image 2 → 圖轉影片 B-roll | `--broll fal-image`／`fal-video`／`fal-image-to-video` 加 `--allow-remote-broll`；缺 key／模型／遠端失敗回退 local |
 | AI 生圖／圖生影片 | OpenAI Images、Gemini／Imagen、FLUX、Runway、Veo、Kling、Luma 等 | optional provider 設計；fal.ai queue adapter 已可用，其餘不作核心硬依賴 |
 
 短片與長片共用語意 JSON、word-level 時間軸與字幕布局；長片使用 `render_full.py`，短片使用 `render_shorts.py`。B-roll／模型 provider 的完整擴充矩陣見 `docs/broll-providers.md`；這些都是 optional，不是剪神核心依賴。
@@ -126,7 +126,7 @@ python3 scripts/doctor.py
 - ChatGPT／Codex／Claude Code／Kimi 網頁訂閱通常不能直接代替第三方 API key。
 - API key 不寫入 skill、git 或 log；fal remote 呼叫必須同時有 `FAL_KEY` 與 `--allow-remote-broll`，缺少 key、影片模型或遠端失敗時必須退回本地路線。
 - fal 下載媒體只作無音軌 overlay，原始口白與字幕最後一層不變；manifest 不得記錄 key 或簽名 URL。
-- Provider 類型、設定名稱與目前完成度見 `docs/broll-providers.md`；文字 → 本地動態圖卡／生圖鏡頭動畫／文字生影片與未來 image-to-video 的分層規則見 `docs/text-to-dynamic-broll.md`。
+- Provider 類型、設定名稱與目前完成度見 `docs/broll-providers.md`；文字 → 本地動態圖卡／生圖鏡頭動畫／文字生影片與 fal GPT Image 2 → image-to-video 的分層規則見 `docs/text-to-dynamic-broll.md`。
 
 ---
 

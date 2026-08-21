@@ -80,7 +80,12 @@ def _group_items(group: list[dict], limit: int = 3) -> list[str]:
 	return items or ["這段重點"]
 
 
-def build_events(captions: list[dict], duration: float, include_broll: bool = True) -> list[dict]:
+def build_events(
+	captions: list[dict],
+	duration: float,
+	include_broll: bool = True,
+	broll_duration: float | None = None,
+) -> list[dict]:
 	"""讓整支短片持續有視覺事件；所有文案仍只取自逐字稿。"""
 	usable = [
 		caption
@@ -108,10 +113,11 @@ def build_events(captions: list[dict], duration: float, include_broll: bool = Tr
 		kind_broll = include_broll and index in broll_indexes
 		if kind_broll:
 			items = _group_items(group, limit=2)
+			current_duration = min(event_duration, broll_duration) if broll_duration is not None else event_duration
 			events.append(
 				{
 					"start": round(start, 3),
-					"duration": round(event_duration, 3),
+					"duration": round(current_duration, 3),
 					"kind": "broll",
 					"params": {
 						"scene": scene_names[index % len(scene_names)],
@@ -167,13 +173,14 @@ def render_events(
 		if event["kind"] == "broll":
 			from broll_adapter import render as render_broll
 
-			use_fal = broll_provider in {"fal-image", "fal-video"}
+			use_fal = broll_provider in {"fal-image", "fal-video", "fal-image-to-video"}
 			if use_fal and fal_config is not None and remote_broll_count < max(0, remote_broll_limit):
 				remote_broll_count += 1
 				try:
-					from fal_broll_provider import FalBrollError, render_fal_broll
+					from fal_broll_provider import FalBrollError, render_fal_broll, render_fal_image_to_video_broll
 
-					metadata = render_fal_broll(
+					renderer = render_fal_image_to_video_broll if broll_provider == "fal-image-to-video" else render_fal_broll
+					metadata = renderer(
 						fal_config,
 						event["params"],
 						float(event["duration"]),

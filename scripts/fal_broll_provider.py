@@ -85,6 +85,14 @@ class GeneratedMedia:
     cache_hit: bool
 
 
+@dataclass(frozen=True)
+class FalImageToVideoConfig:
+    """以 fal 內部 image URL 串接 image-to-video；不保存該暫時 URL。"""
+
+    image: FalConfig
+    video: FalConfig
+
+
 def _clean_env_value(value: str) -> str:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
@@ -221,6 +229,36 @@ def resolve_fal_config(
     )
 
 
+def resolve_fal_image_to_video_config(
+    *,
+    allow_remote: bool,
+    image_model: str | None = None,
+    video_model: str | None = None,
+    timeout_seconds: int | None = None,
+    env: Mapping[str, str] | None = None,
+    env_file: Path | None = None,
+) -> FalImageToVideoConfig:
+    """建立 fal 生圖→圖生影片設定；兩段均使用同一份本機 fal 憑證。"""
+    return FalImageToVideoConfig(
+        image=resolve_fal_config(
+            "image",
+            allow_remote=allow_remote,
+            image_model=image_model,
+            timeout_seconds=timeout_seconds,
+            env=env,
+            env_file=env_file,
+        ),
+        video=resolve_fal_config(
+            "video",
+            allow_remote=allow_remote,
+            video_model=video_model,
+            timeout_seconds=timeout_seconds,
+            env=env,
+            env_file=env_file,
+        ),
+    )
+
+
 def _source_phrase(value: object, limit: int = 150) -> str:
     text = " ".join(str(value or "").split())
     text = SENSITIVE_PROMPT_TOKEN_RE.sub("[link omitted]", text)
@@ -242,7 +280,15 @@ def build_broll_prompt(params: Mapping[str, Any]) -> str:
 
 def _image_arguments(config: FalConfig, prompt: str) -> dict[str, Any]:
     model = config.model.lower()
-    if "nano-banana" in model:
+    if model == "openai/gpt-image-2":
+        arguments: dict[str, Any] = {
+            "prompt": prompt,
+            "image_size": "portrait_16_9",
+            "quality": "medium",
+            "num_images": 1,
+            "output_format": "jpeg",
+        }
+    elif "nano-banana" in model:
         arguments: dict[str, Any] = {
             "prompt": prompt,
             "aspect_ratio": "9:16",
@@ -291,6 +337,58 @@ def _video_arguments(config: FalConfig, prompt: str, duration: float) -> dict[st
     return arguments
 
 
+def _contextual_scene(topic: str) -> str:
+    """以 cue 的已說內容選擇可辨識的真人情境，不產生文字型概念圖卡。"""
+    if re.search(r"引薦|介紹|夥伴|協力|合作", topic):
+        return "two fictional adult Taiwanese business professionals warmly introducing one another and exchanging a blank unbranded business card in a bright modern office"
+    if re.search(r"客戶|開發|服務", topic):
+        return "a fictional adult consultant listening to a client across a small bright meeting table, natural eye contact and a relaxed professional greeting"
+    return "fictional adult business professionals having a natural, calm conversation in a bright modern office"
+
+
+def build_contextual_image_prompt(params: Mapping[str, Any]) -> str:
+    """產生真人情境首幀；嚴禁把 cue 變成抽象符號、資訊圖或畫面內文字。"""
+    fragments = [_source_phrase(params.get("headline")), _source_phrase(params.get("body"))]
+    topic = "；".join(part for part in fragments if part) or "the spoken topic in this short video"
+    return (
+        "Photorealistic candid vertical 9:16 documentary B-roll still: "
+        f"{_contextual_scene(topic)}. It must plausibly illustrate this spoken topic: {topic}. "
+        "Natural realistic hands and faces, subtle warm daylight, authentic camera photography. "
+        "No readable text, captions, logos, watermarks, charts, chess pieces, symbolic objects, statistics, product claims, or identifiable real people."
+    )
+
+
+def build_image_to_video_prompt(params: Mapping[str, Any]) -> str:
+    """將既有 cue 限縮為情境鏡頭提示，不添加客戶事實或畫面內文案。"""
+    fragments = [_source_phrase(params.get("headline")), _source_phrase(params.get("body"))]
+    topic = "；".join(part for part in fragments if part) or "the spoken topic in this short video"
+    return (
+        "Animate the supplied photorealistic vertical B-roll image with subtle, realistic motion illustrating only this spoken topic: "
+        f"{topic}. Use fictional adult professionals only; natural restrained gestures and a slow camera move. "
+        "Do not add readable text, subtitles, logos, watermarks, statistics, product claims, symbolic objects, or audio."
+    )
+
+
+def _image_to_video_arguments(config: FalConfig, prompt: str, duration: float, image_url: str) -> dict[str, Any]:
+    model = config.model.lower()
+    if model == "fal-ai/kling-video/o3/standard/image-to-video":
+        # Kling O3 的公開 schema 沒有 aspect_ratio 欄位，輸出比例繼承 image_url；首幀由 GPT 固定為 portrait_16_9。
+        arguments: dict[str, Any] = {
+            "prompt": prompt,
+            "image_url": image_url,
+            "duration": _video_duration(duration),
+            "generate_audio": False,
+        }
+    else:
+        arguments = {"prompt": prompt, "image_url": image_url}
+    arguments.update(config.input_overrides)
+    arguments["prompt"] = prompt
+    arguments["image_url"] = image_url
+    if "generate_audio" in arguments:
+        arguments["generate_audio"] = False
+    return arguments
+
+
 def _json_request(
     method: str,
     url: str,
@@ -326,18 +424,28 @@ def _json_request(
     return decoded
 
 
-def _cancel_queue_request(config: FalConfig, endpoint: str, request_id: str) -> None:
+def _cancel_queue_request(config: FalConfig, endpoint: str, request_id: str, cancel_url: str | None = None) -> None:
     """盡力取消尚未完成的工作，避免本地 fallback 後仍發生延遲計費。"""
     try:
         _json_request(
             "PUT",
-            f"{endpoint}/requests/{request_id}/cancel",
+            cancel_url or f"{endpoint}/requests/{request_id}/cancel",
             api_key=config.api_key,
             timeout_seconds=config.timeout_seconds,
         )
     except FalBrollError:
         # 取消可能已和遠端完成／失敗競速；原始錯誤才是使用者應看到的回退原因。
         pass
+
+
+def _queue_endpoint_url(value: object, fallback: str) -> str:
+    """只接受 fal queue 回傳的同站 URL，避免遠端回應導向任意主機。"""
+    if not isinstance(value, str):
+        return fallback
+    parsed = urlparse(value)
+    if parsed.scheme == "https" and parsed.netloc == "queue.fal.run":
+        return value
+    return fallback
 
 
 def _queue_result(config: FalConfig, arguments: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -353,10 +461,16 @@ def _queue_result(config: FalConfig, arguments: Mapping[str, Any]) -> tuple[str,
     if not REQUEST_ID_RE.fullmatch(request_id):
         raise FalBrollError("fal-request-id-invalid")
 
+    fallback_status_url = f"{endpoint}/requests/{request_id}/status"
+    fallback_result_url = f"{endpoint}/requests/{request_id}"
+    fallback_cancel_url = f"{endpoint}/requests/{request_id}/cancel"
+    status_url = _queue_endpoint_url(submitted.get("status_url"), fallback_status_url)
+    result_url = _queue_endpoint_url(submitted.get("response_url"), fallback_result_url)
+    cancel_url = _queue_endpoint_url(submitted.get("cancel_url"), fallback_cancel_url)
+
     completed = False
     try:
         deadline = time.monotonic() + config.timeout_seconds
-        status_url = f"{endpoint}/requests/{request_id}/status"
         while True:
             status_payload = _json_request(
                 "GET",
@@ -378,14 +492,14 @@ def _queue_result(config: FalConfig, arguments: Mapping[str, Any]) -> tuple[str,
 
         result = _json_request(
             "GET",
-            f"{endpoint}/requests/{request_id}",
+            result_url,
             api_key=config.api_key,
             timeout_seconds=config.timeout_seconds,
         )
         return request_id, result
     except FalBrollError:
         if not completed:
-            _cancel_queue_request(config, endpoint, request_id)
+            _cancel_queue_request(config, endpoint, request_id, cancel_url)
         raise
 
 
@@ -509,6 +623,45 @@ def generate_media(
     return GeneratedMedia(config.mode, config.model, destination, request_id, False)
 
 
+def generate_image_to_video_media(
+    config: FalImageToVideoConfig,
+    params: Mapping[str, Any],
+    duration: float,
+    cache_dir: Path,
+) -> GeneratedMedia:
+    """以 fal 產圖的暫時 URL 直接串接圖生影片，不保存該 URL。"""
+    image_prompt = build_contextual_image_prompt(params)
+    motion_prompt = build_image_to_video_prompt(params)
+    image_arguments = _image_arguments(config.image, image_prompt)
+    # cache key 只含可重現輸入；遠端圖片 URL 絕不寫入 cache 或 manifest。
+    cache_arguments = {
+        "image_model": config.image.model,
+        "image_arguments": image_arguments,
+        "video_model": config.video.model,
+        "motion_prompt": motion_prompt,
+        "duration": _video_duration(duration),
+        "video_input_overrides": config.video.input_overrides,
+    }
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        stem = hashlib.sha256(
+            json.dumps(cache_arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:24]
+        cached = cache_dir / f"image-to-video-{stem}.mp4"
+        if cached.is_file() and cached.stat().st_size > 0:
+            return GeneratedMedia("video", config.video.model, cached, None, True)
+    except OSError as exc:
+        raise FalBrollError("fal-cache-unavailable") from exc
+
+    _image_request_id, image_payload = _queue_result(config.image, image_arguments)
+    image_url = _media_url(image_payload, "image")
+    video_arguments = _image_to_video_arguments(config.video, motion_prompt, duration, image_url)
+    video_request_id, video_payload = _queue_result(config.video, video_arguments)
+    remote_video_url = _media_url(video_payload, "video")
+    _download_media(remote_video_url, cached, "video", config.video.timeout_seconds)
+    return GeneratedMedia("video", config.video.model, cached, video_request_id, False)
+
+
 def _cover(image: Image.Image, width: int, height: int, zoom: float = 1.0) -> Image.Image:
     ratio = max(width / image.width, height / image.height) * zoom
     resized = image.resize((max(1, round(image.width * ratio)), max(1, round(image.height * ratio))), Image.Resampling.LANCZOS)
@@ -528,8 +681,21 @@ def _fade_opacity(local_time: float, duration: float) -> float:
     return min(1.0, intro * outro)
 
 
-def _compose_frame(source: Image.Image, progress: float, opacity: float) -> Image.Image:
+def _compose_frame(source: Image.Image, progress: float, opacity: float, *, full_bleed: bool = False) -> Image.Image:
     source = source.convert("RGB")
+    if full_bleed:
+        canvas = _cover(source, W, H, 1.0 + 0.025 * progress).convert("RGBA")
+        # 最後仍由 ASS 疊字幕；僅壓低底部，讓情境畫面不需要加字卡也保有可讀性。
+        shade = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        lower_height = H - int(H * 0.62)
+        alpha = Image.linear_gradient("L").resize((W, lower_height)).point(lambda value: round(value * 150 / 255))
+        shade.paste(Image.new("RGBA", (W, lower_height), (0, 0, 0, 255)), (0, H - lower_height), alpha)
+        canvas = Image.alpha_composite(canvas, shade)
+        draw = ImageDraw.Draw(canvas)
+        draw.rounded_rectangle([54, 64, 330, 112], radius=16, fill=(17, 34, 39, 198))
+        draw.text((74, 78), "AI 情境示範 · fal.ai", font=anim_lib.F("B", 20), fill=(255, 255, 255, 235))
+        canvas.putalpha(int(255 * max(0.0, min(1.0, opacity))))
+        return canvas
     background = _cover(source, W, H, 1.06)
     background = background.filter(ImageFilter.GaussianBlur(radius=22))
     background = ImageEnhance.Brightness(background).enhance(0.40).convert("RGBA")
@@ -571,6 +737,7 @@ def _write_composed_frames(
     fps: int,
     *,
     cache_sources: bool = True,
+    full_bleed: bool = False,
 ) -> int:
     """輸出 overlay frames；影片來源逐格解碼，避免累積數 GB 的 RGB frame cache。"""
     if not sources:
@@ -592,6 +759,7 @@ def _write_composed_frames(
                     source,
                     min(1.0, local / max(duration, 0.1)),
                     _fade_opacity(local, duration),
+                    full_bleed=full_bleed,
                 )
                 try:
                     frame.save(output_dir / f"ov_{index:04d}.png")
@@ -646,13 +814,13 @@ def _render_image_media(media_path: Path, duration: float, output_dir: Path, fps
     return _write_composed_frames([media_path], duration, output_dir, fps)
 
 
-def _render_video_media(media_path: Path, duration: float, output_dir: Path, fps: int) -> int:
+def _render_video_media(media_path: Path, duration: float, output_dir: Path, fps: int, *, full_bleed: bool = False) -> int:
     frame_count = max(1, int(round(duration * fps)))
     source_dir: Path | None = None
     try:
         frames = _video_source_frames(media_path, frame_count, fps, output_dir)
         source_dir = frames[0].parent
-        return _write_composed_frames(frames[:frame_count], duration, output_dir, fps, cache_sources=False)
+        return _write_composed_frames(frames[:frame_count], duration, output_dir, fps, cache_sources=False, full_bleed=full_bleed)
     finally:
         if source_dir is not None:
             shutil.rmtree(source_dir, ignore_errors=True)
@@ -683,6 +851,36 @@ def render_fal_broll(
         raise FalBrollError("fal-media-render-failed") from exc
     return {
         "provider": f"fal-{media.kind}",
+        "model": media.model,
+        "media_kind": media.kind,
+        "request_id": media.request_id,
+        "cache_hit": media.cache_hit,
+        "frame_count": frame_count,
+    }
+
+
+def render_fal_image_to_video_broll(
+    config: FalImageToVideoConfig,
+    params: Mapping[str, Any],
+    duration: float,
+    output_dir: Path,
+    *,
+    fps: int = 30,
+    cache_dir: Path | None = None,
+) -> dict[str, Any]:
+    """產生 GPT Image／其他 fal image → fal image-to-video 的 overlay frames。"""
+    if duration <= 0 or fps <= 0:
+        raise FalBrollError("fal-render-timing-invalid")
+    media = generate_image_to_video_media(config, params, duration, cache_dir or output_dir.parent / ".fal-cache")
+    try:
+        frame_count = _render_video_media(media.cache_path, duration, output_dir, fps, full_bleed=True)
+    except FalBrollError:
+        raise
+    except (MemoryError, OSError, ValueError) as exc:
+        raise FalBrollError("fal-media-render-failed") from exc
+    return {
+        "provider": "fal-image-to-video",
+        "image_model": config.image.model,
         "model": media.model,
         "media_kind": media.kind,
         "request_id": media.request_id,
