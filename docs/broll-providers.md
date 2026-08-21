@@ -85,6 +85,13 @@ python3 scripts/render_shorts.py edit.json segments.json \
   --broll fal-image-to-video --allow-remote-broll \
   --remote-broll-limit 2 --remote-broll-seconds 2 --render
 
+# 已核准的 B-roll 可離線重用：不重送 fal request，manifest 不記錄本機路徑。
+python3 scripts/render_shorts.py edit.json segments.json \
+  --source input.mp4 --output-dir shorts \
+  --animation talking-head --visual-cadence 2 --broll local \
+  --reuse-broll-media shorts/.fal-cache/approved-01.mp4 \
+  --generate-bgm --generate-sfx --render
+
 # fal 影片 B-roll：需自行選擇目前可用的文字轉影片 endpoint。
 AWJ_FAL_VIDEO_MODEL=fal-ai/kling-video/v3/standard/text-to-video \
 python3 scripts/render_shorts.py edit.json segments.json \
@@ -111,7 +118,8 @@ AWJ_FAL_VIDEO_MODEL=
 ```
 
 - 每個遠端要求都走 `queue.fal.run`，有 queue timeout、逾時／輪詢失敗時的 best-effort cancel、模型 ID 驗證、下載大小限制與最終輸出目錄內 `.fal-cache`。
-- 短片預設最多生成兩個遠端 B-roll；其餘事件使用本地卡。影片模式沒有預設模型，避免意外扣款。
+- 短片預設最多生成兩個遠端 B-roll；其餘核准事件使用本地卡。talking-head 短片必須先產出人工核准的時間分鏡，未核准段落只保留說話者；影片模式沒有預設模型，避免意外扣款。
+- `--reuse-broll-media` 會優先用已核准的本機影片填入最早的 B-roll slot，不呼叫遠端 provider；manifest 只記錄 `reused-local-media`、媒體類型與 cache 狀態。
 - 下載的 fal 媒體只作無音軌的視覺 overlay，原始人聲與最後燒錄的字幕仍保留；畫面會標示為 `AI 情境示範 · fal.ai`。
 - key 缺失、未明確 opt-in、模型設定不完整、queue／下載／解碼失敗都會回退 `local`；manifest 僅記錄 provider、model、request ID／cache 狀態，絕不記錄 key 或簽名媒體 URL。
 

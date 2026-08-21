@@ -199,6 +199,43 @@ def _scene_pipeline(draw: ImageDraw.ImageDraw, progress: float, opacity: float) 
 	
 
 
+def _scene_people(draw: ImageDraw.ImageDraw, progress: float, opacity: float) -> None:
+	"""以抽象人物與握手動作表現引薦情境，不虛構真人或客戶成果。"""
+	people = [(285, "引薦", TEAL), (540, "合作", GOLD), (795, "客戶", GREEN)]
+	for index, (x, label, color) in enumerate(people):
+		y = 790 + int(22 * math.sin(progress * math.pi + index * 1.4))
+		draw.ellipse([x - 58, y - 180, x + 58, y - 64], fill=_alpha(color, opacity), outline=_alpha(WHITE, opacity * 0.55), width=4)
+		draw.rounded_rectangle([x - 92, y - 48, x + 92, y + 148], radius=46, fill=_alpha(PANEL_2, opacity), outline=_alpha(color, opacity), width=6)
+		font = _font("H", 32)
+		width = draw.textlength(label, font=font)
+		draw.text((x - width / 2, y + 24), label, font=font, fill=_alpha(WHITE, opacity))
+	# 中間雙手向彼此靠攏，讓圖像在兩秒內完成一個可讀動作。
+	hand_offset = int(70 * (1.0 - _eoc(progress)))
+	draw.line([(420 - hand_offset, 940), (530, 1000)], fill=_alpha(GOLD, opacity), width=24)
+	draw.line([(660 + hand_offset, 940), (550, 1000)], fill=_alpha(GOLD, opacity), width=24)
+	draw.ellipse([510, 975, 570, 1035], fill=_alpha(GOLD, opacity))
+
+
+def _scene_table(draw: ImageDraw.ImageDraw, progress: float, opacity: float) -> None:
+	"""以流程表格取代杜撰數字的圖表；欄位只描述角色與下一步。"""
+	left, top, right, bottom = 144, 650, 936, 1135
+	rows = [("角色", "需求", "下一步"), ("引薦", "說清楚", "安排認識"), ("客戶", "確認方向", "持續合作")]
+	col_x = [left, 360, 620, right]
+	row_h = (bottom - top) // len(rows)
+	for row_index, row in enumerate(rows):
+		y = top + row_index * row_h
+		visible = _eoc((progress * len(rows) - row_index + 0.35))
+		if visible <= 0:
+			continue
+		fill = PANEL_2 if row_index == 0 else PANEL
+		draw.rounded_rectangle([left, y, right, y + row_h - 8], radius=12, fill=_alpha(fill, opacity * visible), outline=_alpha(TEAL if row_index == 0 else (74, 92, 94), opacity * visible), width=3)
+		for col_index, label in enumerate(row):
+			font = _font("H" if row_index == 0 else "B", 30 if row_index == 0 else 28)
+			cx = (col_x[col_index] + col_x[col_index + 1]) / 2
+			width = draw.textlength(label, font=font)
+			draw.text((cx - width / 2, y + 47), label, font=font, fill=_alpha(WHITE, opacity * visible))
+
+
 def _scene_loop(draw: ImageDraw.ImageDraw, progress: float, opacity: float) -> None:
 	cx, cy = W // 2, 820
 	box = [cx - 180, cy - 180, cx + 180, cy + 180]
@@ -214,7 +251,9 @@ def _scene_loop(draw: ImageDraw.ImageDraw, progress: float, opacity: float) -> N
 
 
 SCENES = {
+	"people": _scene_people,
 	"network": _scene_network,
+	"table": _scene_table,
 	"funnel": _scene_funnel,
 	"pipeline": _scene_pipeline,
 	"loop": _scene_loop,

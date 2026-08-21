@@ -130,7 +130,7 @@ python3 scripts/render_full.py semantic_full/semantic_edit.json \\
 
 ### 📱 短影音模式（shorts-master + talking-head adapter）
 
-已接入 `shorts-master` 與 `talking-head-video-cut` 的本地路線：自動挑選 3 段候選、9:16 重排、1.15x 變速、每 6～8 秒一次的情境 B-roll／動畫卡、BGM、whoosh／check／stamp 音效、CTA 與繁中單語 ASS 字幕。三支短片共用同一種視覺模板，但各自只帶出一個不同重點；字幕會先合併碎句、最多兩行並在動畫之後疊加，避免只剩單字或被卡片蓋掉。短片與長片共用同一份語意 JSON／word-level 時間軸：
+已接入 `shorts-master` 與 `talking-head-video-cut` 的本地路線：自動挑選 3 段候選、9:16 重排、1.15x 變速，先產出口白時間碼分鏡表供人工決定；未核准時畫面只保留說話者，核准後才插入真人情境 B-roll、人物／關係圖、流程表、清單或印章卡，並加入 BGM、whoosh／check／stamp 音效、CTA 與繁中單語 ASS 字幕。三支短片共用同一種視覺模板，但各自只帶出一個不同重點；字幕會先合併碎句、最多兩行並在動畫之後疊加，避免只剩單字或被卡片蓋掉。短片與長片共用同一份語意 JSON／word-level 時間軸：
 
 ```bash
 python3 scripts/select_short_segments.py semantic_full/semantic_edit.json shorts/short_segments.json \\
@@ -138,14 +138,18 @@ python3 scripts/select_short_segments.py semantic_full/semantic_edit.json shorts
 python3 scripts/render_shorts.py semantic_full/semantic_edit.json shorts/short_segments.json \\
   --source PT工作坊.mp4 --output-dir shorts --speed 1.15 --style editorial --render
 
-# 口播動畫版：動畫元件 + 合成 BGM + CTA
+# 先產出分鏡表：所有段落皆是 pending/talking-head，請先人工決定時間與畫面。
+python3 scripts/build_short_storyboard.py semantic_full/semantic_edit.json shorts/short_segments.json \\
+  --output shorts/storyboard.json --speed 1.15
+
+# 使用者核准 storyboard.json 後，才渲染其中核准的動畫／B-roll。
 python3 scripts/render_shorts.py semantic_full/semantic_edit.json shorts/short_segments.json \\
   --source PT工作坊.mp4 --output-dir shorts/talking_head --speed 1.15 \\
-  --animation talking-head --broll local --generate-bgm --generate-sfx \\
-  --cta "追蹤剪神" --render
+  --animation talking-head --storyboard shorts/storyboard.json --broll local \\
+  --generate-bgm --generate-sfx --cta "追蹤剪神" --render
 ```
 
-短影音片審規則固定在 `prompts/shorts-review.md`：中文市場預設只顯示繁中、字幕先合併碎句、每 6～8 秒有視覺事件、三支短片共用第一版 B-roll／動畫／BGM／音效／CTA 模板但各自帶出不同重點。`--broll local` 是不依賴外部 API 的 Image2-style 情境圖卡 fallback；外部 AI B-roll、素材搜尋與臉部保真服務仍是可選 provider，沒有服務時仍可完成本地短片輸出。完整 provider 選項與模型串接方式見 [`docs/broll-providers.md`](docs/broll-providers.md)；文字 → 本地動態圖卡／生圖鏡頭動畫／文字生影片／fal GPT Image 2 → image-to-video 的分層流程見 [`docs/text-to-dynamic-broll.md`](docs/text-to-dynamic-broll.md)。
+短影音片審規則固定在 `prompts/shorts-review.md`：中文市場預設只顯示繁中、字幕先合併碎句，先用 `build_short_storyboard.py` 產出時間分鏡，再以 `--storyboard` 只渲染使用者核准的視覺事件；三支短片共用第一版 B-roll／動畫／BGM／音效／CTA 模板但各自帶出不同重點。`--broll local` 是不依賴外部 API 的 Image2-style 情境圖卡 fallback；`--reuse-broll-media` 可優先重用已核准的本機 B-roll，不會發出遠端請求。外部 AI B-roll、素材搜尋與臉部保真服務仍是可選 provider，沒有服務時仍可完成本地短片輸出。完整 provider 選項與模型串接方式見 [`docs/broll-providers.md`](docs/broll-providers.md)；文字 → 本地動態圖卡／生圖鏡頭動畫／文字生影片／fal GPT Image 2 → image-to-video 的分層流程見 [`docs/text-to-dynamic-broll.md`](docs/text-to-dynamic-broll.md)。
 
 ### 🧩 fal.ai B-roll（選用）
 

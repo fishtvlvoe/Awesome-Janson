@@ -20,6 +20,7 @@ import render_semantic  # noqa: E402
 import render_shorts  # noqa: E402
 import select_short_segments  # noqa: E402
 import semantic_edit  # noqa: E402
+import storyboard_planner  # noqa: E402
 import talking_head_adapter  # noqa: E402
 from subtitle_layout import mixed_text_tokens, split_subtitle_cue, visual_width, wrap_chinese, wrap_english  # noqa: E402
 
@@ -325,6 +326,73 @@ class SemanticPipelineTests(unittest.TestCase):
 		self.assertLessEqual(max(events[index + 1]["start"] - (events[index]["start"] + events[index]["duration"]) for index in range(len(events) - 1)), 3.0)
 		self.assertIn("一般引薦", json.dumps(events, ensure_ascii=False))
 		self.assertNotIn("30%", json.dumps(events, ensure_ascii=False))
+
+	def test_high_tempo_visual_beats_change_every_two_seconds(self):
+		events = talking_head_adapter.build_events(
+			[
+				{"start": index * 2.0, "end": index * 2.0 + 1.8, "zh": f"第 {index + 1} 個合作重點"}
+				for index in range(16)
+			],
+			29.0,
+			include_broll=True,
+			cadence_seconds=2.0,
+		)
+		self.assertGreaterEqual(len(events), 10)
+		self.assertTrue(all(event["duration"] <= 2.0 for event in events))
+		self.assertTrue(all(
+			events[index + 1]["start"] - events[index]["start"] <= 2.0
+			for index in range(len(events) - 1)
+		))
+		self.assertGreaterEqual(sum(event["kind"] == "broll" for event in events), 4)
+		self.assertIn("people", [event["params"].get("scene") for event in events if event["kind"] == "broll"])
+		self.assertIn("table", [event["params"].get("scene") for event in events if event["kind"] == "broll"])
+
+	def test_reuses_approved_local_broll_before_requesting_provider(self):
+		with tempfile.TemporaryDirectory() as directory:
+			directory_path = Path(directory)
+			media = directory_path / "approved.mp4"
+			media.write_bytes(b"placeholder")
+			events = [{"kind": "broll", "start": 1.0, "duration": 1.9, "params": {"headline": "合作流程"}}]
+			with patch.object(talking_head_adapter, "_render_reusable_broll", return_value=57) as reused:
+				with patch.object(broll_adapter, "render") as local_render:
+					rendered = talking_head_adapter.render_events(
+						events, directory_path / "rendered", reusable_broll_media=[media]
+					)
+			self.assertEqual(rendered[0]["provider"], "reused-local-media")
+			self.assertTrue(rendered[0]["cache_hit"])
+			reused.assert_called_once()
+			local_render.assert_not_called()
+
+	def test_storyboard_starts_as_user_decision_not_auto_cards(self):
+		plan = storyboard_planner.plan_segment(
+			{"id": 1, "title": "引薦", "source_start": 100.0, "source_end": 110.0},
+			[
+				{"start": 0.0, "end": 2.0, "zh": "一般引薦的意思。"},
+				{"start": 2.0, "end": 5.0, "zh": "理想引薦需要合作。"},
+			],
+		)
+		self.assertEqual([beat["approval"] for beat in plan["beats"]], ["pending", "pending"])
+		self.assertEqual([beat["visual"]["type"] for beat in plan["beats"]], ["talking-head", "talking-head"])
+		self.assertEqual(storyboard_planner.approved_events(plan), [])
+		plan["beats"][1]["approval"] = "approved"
+		plan["beats"][1]["visual"] = {"type": "process-table"}
+		events = storyboard_planner.approved_events(plan)
+		self.assertEqual(events[0]["kind"], "broll")
+		self.assertEqual(events[0]["params"]["scene"], "table")
+		self.assertEqual(events[0]["start"], 2.0)
+
+	def test_renderer_loads_only_approved_storyboard_events(self):
+		with tempfile.TemporaryDirectory() as directory:
+			path = Path(directory) / "storyboard.json"
+			plan = storyboard_planner.plan_segment(
+				{"id": 1, "title": "引薦"},
+				[{"start": 0.0, "end": 2.0, "zh": "先保留說話者。"}],
+			)
+			path.write_text(json.dumps({"mode": "user-approved-short-storyboard", "segments": [plan]}, ensure_ascii=False), encoding="utf-8")
+			self.assertEqual(render_shorts.load_storyboard_events(path, 1), [])
+			plan["beats"][0].update({"approval": "approved", "visual": {"type": "process-table"}})
+			path.write_text(json.dumps({"mode": "user-approved-short-storyboard", "segments": [plan]}, ensure_ascii=False), encoding="utf-8")
+			self.assertEqual(len(render_shorts.load_storyboard_events(path, 1)), 1)
 
 	def test_short_ass_shrinks_long_text_before_forcing_line_break(self):
 		with tempfile.TemporaryDirectory() as directory:

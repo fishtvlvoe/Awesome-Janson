@@ -15,6 +15,7 @@ from render_semantic import escape_filter_path
 from subtitle_layout import ASS_FONT_NAME, ASCII_TOKEN_RE, mixed_text_tokens, resolve_font_path, resolve_fonts_dir, visual_width, wrap_chinese
 from generate_sfx import write_sfx
 from talking_head_adapter import build_events, render_events
+from storyboard_planner import approved_events
 
 
 PROFILES = {
@@ -74,6 +75,17 @@ SHORT_CAPTION_FONT_SIZE = 76
 SHORT_CAPTION_MIN_FONT_SIZE = 42
 TAIL_PAD_SECONDS = 0.65
 SHORT_TERMINAL_CHARS = set("。！？；：.!?;:")
+
+
+def load_storyboard_events(path: Path, segment_id: int) -> list[dict]:
+	"""只讀取使用者明確核准的分鏡；沒有分鏡時絕不自動插卡。"""
+	payload = json.loads(path.read_text(encoding="utf-8"))
+	if payload.get("mode") != "user-approved-short-storyboard":
+		raise ValueError("--storyboard 不是 user-approved-short-storyboard 格式")
+	for plan in payload.get("segments", []):
+		if int(plan.get("segment_id", -1)) == segment_id:
+			return approved_events(plan)
+	return []
 
 
 def validate_remote_broll_seconds(provider: str, seconds: float) -> float:
@@ -507,6 +519,9 @@ def main() -> None:
 	parser.add_argument("--speed", type=float, default=1.15)
 	parser.add_argument("--style", choices=sorted(PROFILES), default="editorial")
 	parser.add_argument("--animation", choices=("none", "talking-head"), default="none")
+	parser.add_argument("--storyboard", type=Path, help="先由 build_short_storyboard.py 產出、再由使用者核准的分鏡 JSON")
+	parser.add_argument("--auto-visual-beats", action="store_true", help="明確啟用舊有自動視覺節拍；預設關閉，改由 --storyboard 決定")
+	parser.add_argument("--visual-cadence", type=float, default=2.0, help="僅 --auto-visual-beats 使用的節拍秒數（1.5-4，預設 2）")
 	parser.add_argument(
 		"--broll",
 		choices=("none", "local", "fal-image", "fal-video", "fal-image-to-video"),
@@ -520,6 +535,7 @@ def main() -> None:
 	parser.add_argument("--fal-timeout", type=int, help="per-request fal queue timeout in seconds (10-600)")
 	parser.add_argument("--remote-broll-limit", type=int, default=2, help="maximum remote B-roll events per short (default: 2)")
 	parser.add_argument("--remote-broll-seconds", type=float, default=2.0, help="visible seconds per fal image-to-video event (1-6; default: 2)")
+	parser.add_argument("--reuse-broll-media", type=Path, action="append", default=[], help="已核准的本機 B-roll；優先使用且不觸發遠端生成，可重複指定")
 	parser.add_argument("--bgm", type=Path, help="optional local BGM file")
 	parser.add_argument("--generate-bgm", action="store_true", help="generate a local synthetic BGM")
 	parser.add_argument("--generate-sfx", action="store_true", help="generate local transition/checklist/stamp sound effects")
@@ -533,12 +549,17 @@ def main() -> None:
 		raise SystemExit("--limit 不可小於 0")
 	if args.remote_broll_limit < 0:
 		raise SystemExit("--remote-broll-limit 不可小於 0")
+	if not 1.5 <= args.visual_cadence <= 4.0:
+		raise SystemExit("--visual-cadence 必須介於 1.5 至 4 秒")
 	try:
 		args.remote_broll_seconds = validate_remote_broll_seconds(args.broll, args.remote_broll_seconds)
 	except ValueError as exc:
 		raise SystemExit(str(exc)) from exc
 	if args.bgm and args.generate_bgm:
 		raise SystemExit("--bgm 與 --generate-bgm 不可同時使用")
+	for media in args.reuse_broll_media:
+		if not media.is_file():
+			raise SystemExit(f"--reuse-broll-media 不存在：{media}")
 	edit = json.loads(args.edit.read_text(encoding="utf-8"))
 	segment_payload = json.loads(args.segments.read_text(encoding="utf-8"))
 	args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -607,16 +628,18 @@ def main() -> None:
 			args.cta,
 		)
 		use_talking_head = args.animation == "talking-head" or args.broll != "none"
-		animation_events = (
-			build_events(
+		if args.storyboard:
+			animation_events = load_storyboard_events(args.storyboard, int(segment["id"]))
+		elif args.auto_visual_beats and use_talking_head:
+			animation_events = build_events(
 				captions,
 				output_duration,
 				include_broll=args.broll != "none",
 				broll_duration=args.remote_broll_seconds if args.broll == "fal-image-to-video" else None,
+				cadence_seconds=args.visual_cadence,
 			)
-			if use_talking_head
-			else []
-		)
+		else:
+			animation_events = []
 		animation_dir = args.output_dir / f".talking-head-{int(segment['id']):02d}"
 		rendered_events = (
 			render_events(
@@ -627,6 +650,7 @@ def main() -> None:
 				fal_cache_dir=args.output_dir / ".fal-cache",
 				remote_broll_limit=args.remote_broll_limit,
 				fallback_reason=fal_fallback_reason,
+				reusable_broll_media=[media.resolve() for media in args.reuse_broll_media],
 			)
 			if args.render and animation_events
 			else []
@@ -640,6 +664,7 @@ def main() -> None:
 			"speed": args.speed,
 			"style": args.style,
 			"animation": args.animation,
+			"storyboard_mode": "user-approved" if args.storyboard else ("automatic" if args.auto_visual_beats else "none"),
 			"broll": args.broll,
 			"animation_events": [{k: v for k, v in event.items() if k != "frames"} for event in rendered_events],
 			"bgm": str(bgm_path) if bgm_path else None,
@@ -674,6 +699,7 @@ def main() -> None:
 		"mode": "shorts-master+talking-head-video-cut",
 		"style": args.style,
 		"animation": args.animation,
+		"storyboard": {"mode": "user-approved" if args.storyboard else ("automatic" if args.auto_visual_beats else "none")},
 		"broll": args.broll,
 		"fal": {
 			"remote_opt_in": bool(args.allow_remote_broll),
@@ -683,6 +709,7 @@ def main() -> None:
 			"fallback_reason": fal_fallback_reason,
 			"remote_broll_limit": args.remote_broll_limit,
 			"remote_broll_seconds": args.remote_broll_seconds if args.broll == "fal-image-to-video" else None,
+			"reused_media_count": len(args.reuse_broll_media),
 		},
 		"speed": args.speed,
 		"bgm": str(bgm_path) if bgm_path else None,
