@@ -1,4 +1,5 @@
 .venv/
+.wrangler/
 .env
 .env.*
 !.env.example
