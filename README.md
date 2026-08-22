@@ -90,6 +90,29 @@ cd Awesome-Janson
 chmod +x install.sh && ./install.sh
 ```
 
+## 🧭 剪神 Dashboard：第一次使用
+
+想用選單理解「本人、圖卡、人物 B-roll、字幕」怎麼組合，先開啟 [剪神 Dashboard](https://awesome-janson-dashboard-staging.pages.dev/)。完整的上手流程、模式選擇表、連線架構與畫面截圖，放在 [`docs/dashboard-guide.md`](docs/dashboard-guide.md)。
+
+### 最短使用流程
+
+```text
+啟動本機 Connector
+        ↓ 自動開啟配對頁
+放入影片 → 選畫面安排 → 設定字幕 → 產生分鏡
+                                      ↓
+                         確認後才正式剪輯／產生 B-roll
+```
+
+第一次驗收可直接執行：
+
+```bash
+JANSON_DASHBOARD_URL=https://awesome-janson-dashboard-staging.pages.dev \
+python3 -m scripts.local_connector --serve-once
+```
+
+剪神 Dashboard 不要求使用者建立 Cloudflare 或 Google 帳號。影片、字幕、FFmpeg、HyperFrames 與本機 provider 仍在本機處理；目前 staging 版本的完整說明見 [`docs/dashboard-guide.md`](docs/dashboard-guide.md)。
+
 ---
 
 ## 🛠️ 環境相容性診斷
