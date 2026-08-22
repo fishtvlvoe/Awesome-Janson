@@ -27,7 +27,7 @@
 
       <div class="sidebar-footer">
         <span class="local-dot"></span>
-        <span>本機處理中</span>
+        <span>檔案只留本機</span>
         <button class="quiet-button" type="button" aria-label="開啟設定">⋯</button>
       </div>
     </aside>
@@ -39,6 +39,10 @@
           <h1>把影片整理成一支能看的片</h1>
         </div>
         <div class="top-actions">
+          <div class="connector-status" id="connector-status" data-state="local" aria-live="polite">
+            <span class="connector-pip"></span>
+            <span><strong id="connector-status-label">本機模式</strong><small id="connector-status-detail">等待連線</small></span>
+          </div>
           <span class="save-state"><span class="save-dot"></span>尚未儲存</span>
           <button class="button button-secondary" id="reset-project" type="button">清除設定</button>
         </div>
@@ -126,11 +130,22 @@
             <div class="timeline-legend"><span><i class="dot dot-talking"></i>本人</span><span><i class="dot dot-people"></i>人物情境</span><span><i class="dot dot-cards"></i>動態圖卡</span></div>
           </div>
           <div class="privacy-note"><span>⌁</span><span><strong>檔案留在本機</strong><small>只有你選擇使用人物情境時，指定片段才會送到外部服務。</small></span></div>
+          <section class="connector-card" id="connector-panel" aria-labelledby="connector-title">
+            <div class="connector-card-head"><span class="connector-kicker">本機 Connector</span><span class="connector-badge" id="connector-badge">本機模式</span></div>
+            <h2 id="connector-title">把這台電腦接上工作台</h2>
+            <p id="connector-copy">啟動本機 Connector 後，這頁會自動完成配對。影片與金鑰不會上傳。</p>
+            <div class="connector-actions">
+              <button class="button button-secondary" id="connector-health" type="button" disabled>測試本機</button>
+              <button class="button button-secondary" id="connector-echo" type="button" disabled>送出測試訊息</button>
+            </div>
+            <p class="connector-result" id="connector-result" hidden></p>
+          </section>
         </aside>
       </div>
     </main>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>
+  <script src="connector-ui.js"></script>
 </body>
 </html>
