@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="剪神本機影片工作台">
+  <title>剪神｜影片工作台</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#top" aria-label="剪神影片工作台">
+        <span class="brand-mark">J</span>
+        <span><strong>剪神</strong><small>影片工作台</small></span>
+      </a>
+
+      <nav class="main-nav" aria-label="工作流程">
+        <p class="nav-label">這支影片</p>
+        <button class="nav-item is-active" type="button" data-nav="project"><span>01</span>影片設定</button>
+        <button class="nav-item" type="button" data-nav="captions"><span>02</span>字幕</button>
+        <button class="nav-item" type="button" data-nav="visuals"><span>03</span>畫面安排</button>
+        <button class="nav-item" type="button" data-nav="storyboard"><span>04</span>分鏡草稿</button>
+        <button class="nav-item" type="button" data-nav="export"><span>05</span>輸出</button>
+        <a class="nav-info" href="analysis.html"><span>i</span>功能地圖</a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span class="local-dot"></span>
+        <span>檔案只留本機</span>
+        <button class="quiet-button" type="button" aria-label="開啟設定">⋯</button>
+      </div>
+    </aside>
+
+    <main class="main-content" id="top">
+      <header class="topbar">
+        <div>
+          <p class="breadcrumb">專案 / 新影片</p>
+          <h1>把影片整理成一支能看的片</h1>
+        </div>
+        <div class="top-actions">
+          <div class="connector-status" id="connector-status" data-state="local" aria-live="polite">
+            <span class="connector-pip"></span>
+            <span><strong id="connector-status-label">本機模式</strong><small id="connector-status-detail">等待連線</small></span>
+          </div>
+          <span class="save-state"><span class="save-dot"></span>尚未儲存</span>
+          <button class="button button-secondary" id="reset-project" type="button">清除設定</button>
+        </div>
+      </header>
+
+      <div class="content-grid">
+        <section class="workspace-column" aria-label="影片設定">
+          <section class="section-block source-block" data-section="project">
+            <div class="section-heading">
+              <div><span class="step-number">01</span><h2>先放入影片</h2></div>
+              <span class="section-status" id="source-status">等待選擇</span>
+            </div>
+            <label class="dropzone" for="source-file" id="dropzone">
+              <input id="source-file" type="file" accept="video/*,.mp4,.mov,.mkv" hidden>
+              <span class="drop-icon">＋</span>
+              <span><strong id="source-name">選一支影片</strong><small id="source-help">支援 MP4、MOV；檔案只留在這台電腦</small></span>
+              <span class="drop-action">瀏覽檔案</span>
+            </label>
+          </section>
+
+          <section class="section-block" data-section="visuals">
+            <div class="section-heading">
+              <div><span class="step-number">02</span><h2>決定畫面怎麼走</h2></div>
+              <span class="section-status accent">可隨時修改</span>
+            </div>
+            <p class="section-intro">先選一個方向，系統會照內容安排剪輯。細節之後再看。</p>
+            <div class="choice-grid" role="radiogroup" aria-label="畫面策略">
+              <button class="choice-card" type="button" data-mode="talking" role="radio" aria-checked="false">
+                <span class="choice-index">A</span><strong>本人為主</strong><small>保留說話者，整理節奏與字幕</small>
+              </button>
+              <button class="choice-card" type="button" data-mode="cards" role="radio" aria-checked="false">
+                <span class="choice-index">B</span><strong>圖卡說明</strong><small>用流程、重點卡幫觀眾理解</small>
+              </button>
+              <button class="choice-card" type="button" data-mode="people" role="radio" aria-checked="false">
+                <span class="choice-index">C</span><strong>人物情境</strong><small>穿插 AI 生成人物 B-roll</small>
+              </button>
+              <button class="choice-card is-selected" type="button" data-mode="mixed" role="radio" aria-checked="true">
+                <span class="choice-index">D</span><strong>混合安排</strong><small>本人、圖卡、人物情境一起用</small><em>推薦</em>
+              </button>
+            </div>
+            <div class="sub-options" id="mixed-options">
+              <label class="field-label" for="broll-amount">人物情境出現頻率</label>
+              <select id="broll-amount"><option value="light">少量，1–2 段</option><option value="standard">標準，2–4 段</option><option value="many">較多，依分鏡決定</option></select>
+              <p class="field-note">AI 畫面會先放進分鏡草稿，確認後才產生。</p>
+            </div>
+          </section>
+
+          <section class="section-block" data-section="captions">
+            <div class="section-heading">
+              <div><span class="step-number">03</span><h2>字幕先設定好</h2></div>
+              <span class="section-status">目前功能</span>
+            </div>
+            <div class="setting-list">
+              <label class="setting-row"><span><strong>自動整理字幕</strong><small>合併碎句，避免字幕只剩一兩個字</small></span><input class="toggle" type="checkbox" checked data-setting="captions"></label>
+              <label class="setting-row"><span><strong>刪除贅字建議</strong><small>先提出建議，不會直接刪掉你的內容</small></span><input class="toggle" type="checkbox" checked data-setting="fillers"></label>
+              <label class="setting-row"><span><strong>顯示英文副字幕</strong><small>輸出時可再關閉</small></span><input class="toggle" type="checkbox" data-setting="english"></label>
+            </div>
+          </section>
+
+          <section class="advanced-section">
+            <button class="advanced-toggle" type="button" aria-expanded="false" id="advanced-toggle"><span>進階設定</span><span>＋</span></button>
+            <div class="advanced-panel" id="advanced-panel" hidden>
+              <label class="field-label" for="pace">剪輯節奏</label>
+              <select id="pace"><option>保守</option><option selected>標準</option><option>快節奏</option></select>
+              <label class="field-label" for="style">字幕樣式</label>
+              <select id="style"><option selected>清楚白字</option><option>重點黃字</option><option>品牌樣式</option></select>
+            </div>
+          </section>
+
+          <div class="bottom-actions">
+            <button class="button button-primary" id="make-storyboard" type="button">產生分鏡草稿 <span>→</span></button>
+            <p>先看安排，再決定要不要產生 AI 人物畫面。</p>
+          </div>
+        </section>
+
+        <aside class="preview-column" aria-label="影片預覽">
+          <div class="preview-header"><span>預覽</span><span class="preview-badge">尚未開始</span></div>
+          <div class="preview-frame">
+            <video id="preview-video" controls playsinline preload="metadata"></video>
+            <div class="preview-empty" id="preview-empty"><span class="play-mark">▶</span><strong>選好影片後會在這裡預覽</strong><small>目前所有設定都可以回頭修改</small></div>
+          </div>
+          <div class="timeline-card">
+            <div class="timeline-head"><strong>畫面預覽</strong><span id="timeline-label">混合安排</span></div>
+            <div class="timeline" aria-label="預計畫面流程"><span class="segment segment-talking" style="width:28%">本人</span><span class="segment segment-people" style="width:15%">人物</span><span class="segment segment-cards" style="width:32%">圖卡</span><span class="segment segment-talking" style="width:25%">本人</span></div>
+            <div class="timeline-legend"><span><i class="dot dot-talking"></i>本人</span><span><i class="dot dot-people"></i>人物情境</span><span><i class="dot dot-cards"></i>動態圖卡</span></div>
+          </div>
+          <div class="privacy-note"><span>⌁</span><span><strong>檔案留在本機</strong><small>只有你選擇使用人物情境時，指定片段才會送到外部服務。</small></span></div>
+          <section class="connector-card" id="connector-panel" aria-labelledby="connector-title">
+            <div class="connector-card-head"><span class="connector-kicker">本機 Connector</span><span class="connector-badge" id="connector-badge">本機模式</span></div>
+            <h2 id="connector-title">把這台電腦接上工作台</h2>
+            <p id="connector-copy">啟動本機 Connector 後，這頁會自動完成配對。影片與金鑰不會上傳。</p>
+            <div class="connector-actions">
+              <button class="button button-secondary" id="connector-health" type="button" disabled>測試本機</button>
+              <button class="button button-secondary" id="connector-echo" type="button" disabled>送出測試訊息</button>
+            </div>
+            <p class="connector-result" id="connector-result" hidden></p>
+          </section>
+        </aside>
+      </div>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+  <script src="connector-ui.js"></script>
+</body>
+</html>

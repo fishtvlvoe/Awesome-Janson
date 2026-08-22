@@ -14,6 +14,26 @@ EN_FONT_SIZE = 30
 MAX_TEXT_WIDTH = 1080.0
 MAX_ZH_UNITS = 22
 MAX_EN_CHARS = 60
+ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9@%+._~:/?#\[\]&=;()\-]*")
+TRAILING_ASCII_PUNCTUATION = ".,;:!?"
+CLOSING_DELIMITERS = set("」』）】〉》〕〗〙〛\"'”’)]}")
+ATTACHED_TRAILING_PUNCTUATION = set("，。！？；：、,.!?;:") | CLOSING_DELIMITERS
+
+
+def mixed_text_tokens(text: str) -> list[str]:
+	"""將 URL、版本號、email 等 ASCII token 視為不可分割的字幕單位。"""
+	result: list[str] = []
+	cursor = 0
+	for match in ASCII_TOKEN_RE.finditer(text):
+		result.extend(text[cursor : match.start()])
+		token = match.group()
+		core = token.rstrip(TRAILING_ASCII_PUNCTUATION)
+		if core:
+			result.append(core)
+		result.extend(token[len(core) :])
+		cursor = match.end()
+	result.extend(text[cursor:])
+	return result
 
 
 def resolve_font_path() -> Path | None:
@@ -60,10 +80,30 @@ def visual_width(text: str, font_size: float, english: bool = False) -> float:
 	return sum(_char_width(char, font_size, english=english) for char in text)
 
 
+def _fit_unbroken_token(
+	token: str,
+	max_width: float,
+	font_size: float,
+	english: bool = False,
+	trailing_punctuation: str = "",
+) -> str:
+	"""把無法換行的超長 token 安全縮略成可顯示的一行。"""
+	full_text = token + trailing_punctuation
+	if visual_width(full_text, font_size, english=english) <= max_width:
+		return full_text
+	suffix = "…"
+	fitted = ""
+	for char in token:
+		if visual_width(fitted + char + suffix + trailing_punctuation, font_size, english=english) > max_width:
+			break
+		fitted += char
+	return (fitted + suffix + trailing_punctuation) if fitted else (suffix + trailing_punctuation)
+
+
 def _display_units(text: str, font_size: float) -> int:
 	units = 0
-	for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9+./_-]*|.", text):
-		if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+./_-]*", token):
+	for token in mixed_text_tokens(text):
+		if ASCII_TOKEN_RE.fullmatch(token):
 			units += max(1, round(visual_width(token, font_size, english=True) / font_size))
 		else:
 			units += 1
@@ -80,9 +120,25 @@ def wrap_chinese(
 	lines: list[str] = []
 	for source_line in re.split(r"\r?\n", text.strip()):
 		current = ""
-		# 連續英數與專有名詞視為一個 token，不能在 Computex、Wi-Fi 中間斷行。
-		tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9+./_-]*|.", source_line)
-		for token in tokens:
+		# 連續英數、URL 與專有名詞視為一個 token，不能在 Computex、Wi-Fi、https:// 中間斷行。
+		tokens = mixed_text_tokens(source_line)
+		index = 0
+		while index < len(tokens):
+			raw_token = tokens[index]
+			trailing_punctuation = ""
+			next_index = index + 1
+			if ASCII_TOKEN_RE.fullmatch(raw_token):
+				# URL 後的句尾標點與縮略 token 一起留在同一行，不能變成獨立字幕。
+				while (
+					next_index < len(tokens)
+					and len(tokens[next_index]) == 1
+					and tokens[next_index] in ATTACHED_TRAILING_PUNCTUATION
+				):
+					trailing_punctuation += tokens[next_index]
+					next_index += 1
+				token = _fit_unbroken_token(raw_token, max_width, font_size, trailing_punctuation=trailing_punctuation)
+			else:
+				token = raw_token
 			candidate = current + token
 			if current and (
 				visual_width(candidate, font_size) > max_width
@@ -92,6 +148,7 @@ def wrap_chinese(
 				current = token
 			else:
 				current = candidate
+			index = next_index
 		if current:
 			lines.append(current.rstrip())
 	return r"\N".join(lines)
@@ -100,7 +157,7 @@ def wrap_chinese(
 def _split_tokens(text: str, english: bool) -> list[str]:
 	if english:
 		return re.findall(r"\S+\s*", text.strip())
-	return re.findall(r"[A-Za-z0-9][A-Za-z0-9+./_-]*|.", text.strip())
+	return mixed_text_tokens(text.strip())
 
 
 def _token_units(token: str, english: bool) -> float:
@@ -141,6 +198,30 @@ def split_text_parts(text: str, parts: int, english: bool = False) -> list[str]:
 	return [item for item in result if item]
 
 
+def _attach_orphan_punctuation(chunks: list[str]) -> list[str]:
+	"""將因 token 分割留下的單獨標點併回相鄰字幕，不建立孤兒 cue。"""
+	punctuation = set("，。！？；：、,.!?;:") | CLOSING_DELIMITERS
+	result: list[str] = []
+	leading = ""
+	for raw_chunk in chunks:
+		chunk = raw_chunk.strip()
+		if chunk and all(char in punctuation for char in chunk):
+			if result:
+				result[-1] += chunk
+			else:
+				leading += chunk
+			continue
+		if chunk:
+			result.append(leading + chunk)
+			leading = ""
+	if leading:
+		if result:
+			result[-1] += leading
+		else:
+			result.append(leading)
+	return result
+
+
 def split_subtitle_cue(cue: dict) -> list[dict]:
 	"""限制每個字幕事件最多兩行，超長句拆成多個有時間的 cue。"""
 	zh = re.sub(r"\s*\r?\n\s*", "", str(cue.get("zh", "")).strip())
@@ -154,8 +235,10 @@ def split_subtitle_cue(cue: dict) -> list[dict]:
 	parts = max(zh_parts, en_parts, math.ceil(wrapped_zh_lines / 2), math.ceil(wrapped_en_lines / 2))
 	if parts <= 1:
 		return [normalised]
-	zh_chunks = split_text_parts(zh, parts, english=False)
-	en_chunks = split_text_parts(en, parts, english=True) if en else [""] * parts
+	zh_chunks = _attach_orphan_punctuation(split_text_parts(zh, parts, english=False))
+	en_chunks = _attach_orphan_punctuation(split_text_parts(en, parts, english=True)) if en else []
+	# 單一超長 token 無法再按詞切 cue；不要為湊原先估算的 parts 產生空字幕事件。
+	parts = max(1, min(parts, max(len(zh_chunks), len(en_chunks), 1)))
 	while len(zh_chunks) < parts:
 		zh_chunks.append("")
 	while len(en_chunks) < parts:
@@ -188,7 +271,9 @@ def wrap_english(
 	lines: list[str] = []
 	for source_line in re.split(r"\r?\n", text.strip()):
 		current = ""
-		for token in re.findall(r"\S+\s*", source_line):
+		for raw_token in re.findall(r"\S+\s*", source_line):
+			trailing_space = raw_token[len(raw_token.rstrip()) :]
+			token = _fit_unbroken_token(raw_token.rstrip(), max_width, font_size, english=True) + trailing_space
 			candidate = current + token
 			if current and (
 				visual_width(candidate.rstrip(), font_size, english=True) > max_width

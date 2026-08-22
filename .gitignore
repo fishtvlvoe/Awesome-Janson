@@ -1,4 +1,10 @@
 .venv/
+.wrangler/
+.env
+.env.*
+!.env.example
+.fal-cache/
+.talking-head-*/
 __pycache__/
 *.pyc
 .DS_Store

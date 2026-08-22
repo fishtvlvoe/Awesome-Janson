@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-green.svg)]()
 
-「剪神 (Awesome-Janson)」是專為現代創作者、講師與開發者打造的 **AI 影片剪輯全能 Agent**。目前已完成長片語意精修、`shorts-master` 與 `talking-head-video-cut` 本地短影音 adapter；電影級 **`video-shotcraft`**、Pixel2Motion、GSAP、Remotion 與 LottieFiles motion-design 作為進階動畫技能路由。
+「剪神 (Awesome-Janson)」是專為現代創作者、講師與開發者打造的 **AI 影片剪輯全能 Agent**。目前已完成長片語意精修、`shorts-master` 與 `talking-head-video-cut` 本地短影音 adapter；電影級 **`video-shotcraft`**、Pixel2Motion、GSAP、Remotion 與 LottieFiles motion-design 作為進階動畫技能路由。HyperFrames 專案另可選用官方本機 CLI，既有 FFmpeg 路線不受影響。
 
 
 ---
@@ -44,6 +44,7 @@
 * 🏗️ **[蓋神 Awesome-Gason](https://github.com/fishtvlvoe/Awesome-Gason)**：Spectra SDD 全自動開發總管（規格→TDD→多代理派工→CR→驗收）
 * 🗣️ **[譯神 Awesome-Eason](https://github.com/fishtvlvoe/Awesome-Eason)**：小白技術降維、台灣繁中去 AI 味與翻譯急救
 * ⌨️ **[Key神 Awesome-Keyson](https://github.com/fishtvlvoe/Awesome-Keyson)**：自動 Key 單、智慧語意對齊與跨平台表單自動填寫
+* 📊 **[待神 Awesome-Dyson](https://github.com/fishtvlvoe/Awesome-Dyson)**：跨專案開發儀表板：固定網址看現況、進度、待確認事項與歷史紀錄，換 CLI/AI 接手不用重新對焦
 * 🎬 **[剪神 Awesome-Janson](https://github.com/fishtvlvoe/Awesome-Janson)**（本倉庫）：全能 AI 影片剪輯 Agent（長片精修、爆款短影音與動效）
 <!-- GODS-FAMILY:END -->
 
@@ -89,6 +90,29 @@ cd Awesome-Janson
 chmod +x install.sh && ./install.sh
 ```
 
+## 🧭 剪神 Dashboard：第一次使用
+
+想用選單理解「本人、圖卡、人物 B-roll、字幕」怎麼組合，先開啟 [剪神 Dashboard](https://awesome-janson-dashboard-staging.pages.dev/)。完整的上手流程、模式選擇表、連線架構與畫面截圖，放在 [`docs/dashboard-guide.md`](docs/dashboard-guide.md)。
+
+### 最短使用流程
+
+```text
+啟動本機 Connector
+        ↓ 自動開啟配對頁
+放入影片 → 選畫面安排 → 設定字幕 → 產生分鏡
+                                      ↓
+                         確認後才正式剪輯／產生 B-roll
+```
+
+第一次驗收可直接執行：
+
+```bash
+JANSON_DASHBOARD_URL=https://awesome-janson-dashboard-staging.pages.dev \
+python3 -m scripts.local_connector --serve-once
+```
+
+剪神 Dashboard 不要求使用者建立 Cloudflare 或 Google 帳號。影片、字幕、FFmpeg、HyperFrames 與本機 provider 仍在本機處理；目前 staging 版本的完整說明見 [`docs/dashboard-guide.md`](docs/dashboard-guide.md)。
+
 ---
 
 ## 🛠️ 環境相容性診斷
@@ -130,7 +154,7 @@ python3 scripts/render_full.py semantic_full/semantic_edit.json \\
 
 ### 📱 短影音模式（shorts-master + talking-head adapter）
 
-已接入 `shorts-master` 與 `talking-head-video-cut` 的本地路線：自動挑選 3 段候選、9:16 重排、1.15x 變速、每 6～8 秒一次的情境 B-roll／動畫卡、BGM、whoosh／check／stamp 音效、CTA 與繁中單語 ASS 字幕。三支短片共用同一種視覺模板，但各自只帶出一個不同重點；字幕會先合併碎句、最多兩行並在動畫之後疊加，避免只剩單字或被卡片蓋掉。短片與長片共用同一份語意 JSON／word-level 時間軸：
+已接入 `shorts-master` 與 `talking-head-video-cut` 的本地路線：自動挑選 3 段候選、9:16 重排、1.15x 變速，先產出口白時間碼分鏡表供人工決定；未核准時畫面只保留說話者，核准後才插入真人情境 B-roll、人物／關係圖、流程表、清單或印章卡，並加入 BGM、whoosh／check／stamp 音效、CTA 與繁中單語 ASS 字幕。三支短片共用同一種視覺模板，但各自只帶出一個不同重點；字幕會先合併碎句、最多兩行並在動畫之後疊加，避免只剩單字或被卡片蓋掉。短片與長片共用同一份語意 JSON／word-level 時間軸：
 
 ```bash
 python3 scripts/select_short_segments.py semantic_full/semantic_edit.json shorts/short_segments.json \\
@@ -138,14 +162,41 @@ python3 scripts/select_short_segments.py semantic_full/semantic_edit.json shorts
 python3 scripts/render_shorts.py semantic_full/semantic_edit.json shorts/short_segments.json \\
   --source PT工作坊.mp4 --output-dir shorts --speed 1.15 --style editorial --render
 
-# 口播動畫版：動畫元件 + 合成 BGM + CTA
+# 先產出分鏡表：所有段落皆是 pending/talking-head，請先人工決定時間與畫面。
+python3 scripts/build_short_storyboard.py semantic_full/semantic_edit.json shorts/short_segments.json \\
+  --output shorts/storyboard.json --speed 1.15
+
+# 使用者核准 storyboard.json 後，才渲染其中核准的動畫／B-roll。
 python3 scripts/render_shorts.py semantic_full/semantic_edit.json shorts/short_segments.json \\
   --source PT工作坊.mp4 --output-dir shorts/talking_head --speed 1.15 \\
-  --animation talking-head --broll local --generate-bgm --generate-sfx \\
-  --cta "追蹤剪神" --render
+  --animation talking-head --storyboard shorts/storyboard.json --broll local \\
+  --generate-bgm --generate-sfx --cta "追蹤剪神" --render
 ```
 
-短影音片審規則固定在 `prompts/shorts-review.md`：中文市場預設只顯示繁中、字幕先合併碎句、每 6～8 秒有視覺事件、三支短片共用第一版 B-roll／動畫／BGM／音效／CTA 模板但各自帶出不同重點。`--broll local` 是不依賴外部 API 的 Image2-style 情境圖卡 fallback；外部 AI B-roll 與臉部保真服務仍是可選 provider，沒有服務時仍可完成本地短片輸出。
+短影音片審規則固定在 `prompts/shorts-review.md`：中文市場預設只顯示繁中、字幕先合併碎句，先用 `build_short_storyboard.py` 產出時間分鏡，再以 `--storyboard` 只渲染使用者核准的視覺事件；三支短片共用第一版 B-roll／動畫／BGM／音效／CTA 模板但各自帶出不同重點。`--broll local` 是不依賴外部 API 的 Image2-style 情境圖卡 fallback；`--reuse-broll-media` 可優先重用已核准的本機 B-roll，不會發出遠端請求。外部 AI B-roll、素材搜尋與臉部保真服務仍是可選 provider，沒有服務時仍可完成本地短片輸出。完整 provider 選項與模型串接方式見 [`docs/broll-providers.md`](docs/broll-providers.md)；文字 → 本地動態圖卡／生圖鏡頭動畫／文字生影片／fal GPT Image 2 → image-to-video 的分層流程見 [`docs/text-to-dynamic-broll.md`](docs/text-to-dynamic-broll.md)。
+
+### 🧩 fal.ai B-roll（選用）
+
+`fal-image` 已支援 fal queue 的直式生圖 B-roll；`fal-video` 支援使用者指定的文字轉影片 endpoint；`fal-image-to-video` 可用 fal 的 `openai/gpt-image-2` 產生情境首幀，再接 image-to-video endpoint。遠端呼叫必須同時選擇 fal 模式與加上 `--allow-remote-broll`，否則自動回退 local，不會意外扣款。API key 只放在本機 `.env`／環境變數，不可貼進聊天或 git。
+
+```bash
+# 在本機 .env 設定 FAL_KEY 後；預設使用 fal-ai/flux/schnell。
+python3 scripts/render_shorts.py edit.json segments.json \
+  --source input.mp4 --output-dir shorts/fal-image \
+  --broll fal-image --allow-remote-broll --remote-broll-limit 2 --render
+
+# 影片模型需明確選擇 endpoint，避免預設啟用高成本模型。
+AWJ_FAL_VIDEO_MODEL=fal-ai/kling-video/v3/standard/text-to-video \
+python3 scripts/render_shorts.py edit.json segments.json \
+  --source input.mp4 --output-dir shorts/fal-video \
+  --broll fal-video --allow-remote-broll --remote-broll-limit 1 --render
+```
+
+生成媒體會快取於輸出目錄的 `.fal-cache/`，只作無音軌視覺 overlay；原始口白與最終字幕仍保留。key、簽名下載 URL 不會進 manifest。參數、回退與模型相容性請看 [`docs/broll-providers.md`](docs/broll-providers.md)。
+
+### 🧩 B-roll 與模型擴充（optional providers）
+
+剪神核心不綁任何雲端模型。除了本地圖卡，也可以選擇 Pexels／Pixabay 素材、OpenAI Images、Gemini／Imagen、FLUX、Runway、Veo、Kling、Luma 或本地 ComfyUI；這些 provider 都是可插拔擴充，沒有 API 時會回退到 local。請先讀 [`docs/broll-providers.md`](docs/broll-providers.md) 再決定是否接入。
 
 ### 🧠 主題生成模式（MoneyPrinterTurbo provider）
 

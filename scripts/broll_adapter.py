@@ -12,12 +12,14 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from talking_head_adapter import anim_lib
+from subtitle_layout import mixed_text_tokens
 
 
 W, H = 1080, 1920
-DARK = (10, 20, 22)
-PANEL = (15, 31, 36)
-PANEL_2 = (21, 43, 48)
+# 與 render_shorts editorial 背景 0x16181D 對齊，避免 B-roll 跳出另一套底色。
+DARK = (22, 24, 29)
+PANEL = (30, 38, 45)
+PANEL_2 = (38, 48, 55)
 TEAL = (20, 200, 190)
 GOLD = (255, 214, 0)
 WHITE = (255, 255, 255)
@@ -67,6 +69,14 @@ def _wrap(text: str, font, max_width: int, max_lines: int = 2) -> list[str]:
 	return [lines[0], "".join(lines[1:])[:18] + ("…" if len("".join(lines[1:])) > 18 else "")]
 
 
+def _draw_lines(draw: ImageDraw.ImageDraw, lines: list[str], center_x: int, top: int, font, fill, line_gap: int = 12) -> int:
+	line_height = max(42, font.getbbox("國")[3] - font.getbbox("國")[1])
+	for index, line in enumerate(lines):
+		width = draw.textlength(line, font=font)
+		draw.text((center_x - width / 2, top + index * (line_height + line_gap)), line, font=font, fill=fill)
+	return top + len(lines) * (line_height + line_gap)
+
+
 def _text_block(
 	draw: ImageDraw.ImageDraw,
 	text: str,
@@ -77,12 +87,49 @@ def _text_block(
 	max_width: int,
 	line_gap: int = 12,
 ) -> int:
-	lines = _wrap(text, font, max_width)
-	line_height = max(42, font.getbbox("國")[3] - font.getbbox("國")[1])
-	for index, line in enumerate(lines):
-		width = draw.textlength(line, font=font)
-		draw.text((center_x - width / 2, top + index * (line_height + line_gap)), line, font=font, fill=fill)
-	return top + len(lines) * (line_height + line_gap)
+	return _draw_lines(draw, _wrap(text, font, max_width), center_x, top, font, fill, line_gap)
+
+
+def _headline_break_positions(text: str) -> list[int]:
+	"""只允許在 ASCII token 外的標點後換行，避免 URL 被切成 ``https:``。"""
+	positions: list[int] = []
+	cursor = 0
+	for token in mixed_text_tokens(text):
+		cursor += len(token)
+		if len(token) == 1 and token in "，。！？；：、,.!?;:":
+			positions.append(cursor)
+	return positions
+
+
+def _truncate_headline(text: str, font, max_width: int, draw: ImageDraw.ImageDraw) -> str:
+	"""無安全換行點的超長標題以尾端省略號縮略，保留完整 token 前綴。"""
+	if draw.textlength(text, font=font) <= max_width:
+		return text
+	suffix = "…"
+	fitted = ""
+	for char in text:
+		if draw.textlength(fitted + char + suffix, font=font) > max_width:
+			break
+		fitted += char
+	return (fitted + suffix) if fitted else suffix
+
+
+def _fit_headline(text: str, max_width: int = 780) -> tuple[list[str], object]:
+	"""標題先縮成一行；只有安全標點可切時才使用兩行。"""
+	dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+	for size in range(64, 43, -2):
+		font = _font("H", size)
+		if dummy.textlength(text, font=font) <= max_width:
+			return [text], font
+	breaks = _headline_break_positions(text)
+	for size in range(60, 43, -2):
+		font = _font("H", size)
+		for split_at in sorted(breaks, key=lambda value: abs(value - len(text) / 2)):
+			left, right = text[:split_at].strip(), text[split_at:].strip()
+			if left and right and dummy.textlength(left, font=font) <= max_width and dummy.textlength(right, font=font) <= max_width:
+				return [left, right], font
+	font = _font("H", 42)
+	return [_truncate_headline(text, font, max_width, dummy)], font
 
 
 def _arrow(draw: ImageDraw.ImageDraw, start: tuple[int, int], end: tuple[int, int], color, width: int = 8) -> None:
@@ -152,6 +199,43 @@ def _scene_pipeline(draw: ImageDraw.ImageDraw, progress: float, opacity: float) 
 	
 
 
+def _scene_people(draw: ImageDraw.ImageDraw, progress: float, opacity: float) -> None:
+	"""以抽象人物與握手動作表現引薦情境，不虛構真人或客戶成果。"""
+	people = [(285, "引薦", TEAL), (540, "合作", GOLD), (795, "客戶", GREEN)]
+	for index, (x, label, color) in enumerate(people):
+		y = 790 + int(22 * math.sin(progress * math.pi + index * 1.4))
+		draw.ellipse([x - 58, y - 180, x + 58, y - 64], fill=_alpha(color, opacity), outline=_alpha(WHITE, opacity * 0.55), width=4)
+		draw.rounded_rectangle([x - 92, y - 48, x + 92, y + 148], radius=46, fill=_alpha(PANEL_2, opacity), outline=_alpha(color, opacity), width=6)
+		font = _font("H", 32)
+		width = draw.textlength(label, font=font)
+		draw.text((x - width / 2, y + 24), label, font=font, fill=_alpha(WHITE, opacity))
+	# 中間雙手向彼此靠攏，讓圖像在兩秒內完成一個可讀動作。
+	hand_offset = int(70 * (1.0 - _eoc(progress)))
+	draw.line([(420 - hand_offset, 940), (530, 1000)], fill=_alpha(GOLD, opacity), width=24)
+	draw.line([(660 + hand_offset, 940), (550, 1000)], fill=_alpha(GOLD, opacity), width=24)
+	draw.ellipse([510, 975, 570, 1035], fill=_alpha(GOLD, opacity))
+
+
+def _scene_table(draw: ImageDraw.ImageDraw, progress: float, opacity: float) -> None:
+	"""以流程表格取代杜撰數字的圖表；欄位只描述角色與下一步。"""
+	left, top, right, bottom = 144, 650, 936, 1135
+	rows = [("角色", "需求", "下一步"), ("引薦", "說清楚", "安排認識"), ("客戶", "確認方向", "持續合作")]
+	col_x = [left, 360, 620, right]
+	row_h = (bottom - top) // len(rows)
+	for row_index, row in enumerate(rows):
+		y = top + row_index * row_h
+		visible = _eoc((progress * len(rows) - row_index + 0.35))
+		if visible <= 0:
+			continue
+		fill = PANEL_2 if row_index == 0 else PANEL
+		draw.rounded_rectangle([left, y, right, y + row_h - 8], radius=12, fill=_alpha(fill, opacity * visible), outline=_alpha(TEAL if row_index == 0 else (74, 92, 94), opacity * visible), width=3)
+		for col_index, label in enumerate(row):
+			font = _font("H" if row_index == 0 else "B", 30 if row_index == 0 else 28)
+			cx = (col_x[col_index] + col_x[col_index + 1]) / 2
+			width = draw.textlength(label, font=font)
+			draw.text((cx - width / 2, y + 47), label, font=font, fill=_alpha(WHITE, opacity * visible))
+
+
 def _scene_loop(draw: ImageDraw.ImageDraw, progress: float, opacity: float) -> None:
 	cx, cy = W // 2, 820
 	box = [cx - 180, cy - 180, cx + 180, cy + 180]
@@ -167,7 +251,9 @@ def _scene_loop(draw: ImageDraw.ImageDraw, progress: float, opacity: float) -> N
 
 
 SCENES = {
+	"people": _scene_people,
 	"network": _scene_network,
+	"table": _scene_table,
 	"funnel": _scene_funnel,
 	"pipeline": _scene_pipeline,
 	"loop": _scene_loop,
@@ -194,10 +280,11 @@ def render(lay: str, kind: str, params: dict, dur: float, outdir: Path, fps: int
 		# 兩個緩慢移動的光暈，讓畫面不會像一張死圖。
 		glow_x = int(160 + 760 * ((local / max(dur, 1.0)) % 1.0))
 		draw.ellipse([glow_x - 330, 250, glow_x + 330, 910], fill=_alpha((18, 82, 78), opacity * 0.15))
-		draw.rounded_rectangle([74, 230, 1006, 1375], radius=46, fill=_alpha(PANEL, opacity * 0.96), outline=_alpha(TEAL, opacity * 0.72), width=5)
+		draw.rounded_rectangle([74, 230, 1006, 1375], radius=46, fill=_alpha(PANEL, opacity), outline=_alpha(TEAL, opacity * 0.72), width=5)
 		label_font = _font("B", 28)
 		draw.text((120, 286), "情境示範  ·  B-ROLL", font=label_font, fill=_alpha(TEAL, opacity))
-		_text_block(draw, headline, W // 2, 350, _font("H", 68), _alpha(WHITE, opacity), 780, 10)
+		headline_lines, headline_font = _fit_headline(headline)
+		_draw_lines(draw, headline_lines, W // 2, 350, headline_font, _alpha(WHITE, opacity), 10)
 		scene(draw, _c01(local / max(dur, 1.0)), opacity)
 		if body:
 			_text_block(draw, body, W // 2, 1125, _font("B", 34), _alpha(MUTED, opacity), 760, 8)

@@ -55,7 +55,7 @@ description: "【剪神 / Awesome-Janson】全能 AI 影片剪輯 Agent。支援
 適用於：從長影片中提取精華金句，或直式口播短影音。
 1. **金句萃取**：自動識別整場活動「觀點最犀利、含金量最高」的 3~5 個獨立段落。
 2. **節奏變速**：1.1x–1.3x 變速壓縮至 60~90 秒黃金長度。
-3. **情境 B-roll**：每 6～8 秒安排一次 B-roll、流程圖、關係圖或字卡變化；只有簡報來源時使用本地 Image2-style 圖卡，不依賴外部 API。
+3. **人工核准分鏡**：先輸出含口白時間碼的分鏡表，所有段落預設保留說話者；只有使用者核准的 B-roll、人物／關係圖、流程表、清單或印章才會渲染。既有核准 B-roll 可離線重用，只有簡報來源時才選用本地 Image2-style 圖卡，不依賴外部 API。
 4. **動態字卡**：6 種風格（大字報 editorial / 綜藝爆字 variety / 白板筆記 whiteboard 等），並加入 whoosh／check／stamp 輕音效。
 5. **繁中單語字幕**：短影音不顯示英文；短句 96 級強調、長句 76 級最多兩行，字幕最後疊加避免被 B-roll 蓋住。
 6. **第一版視覺模板固定**：動畫卡、B-roll、BGM、音效、簡單轉場與 CTA 經片審通過後，批次短片共用同一套呈現，只更換各支的核心重點。
@@ -80,12 +80,28 @@ description: "【剪神 / Awesome-Janson】全能 AI 影片剪輯 Agent。支援
 | `motion-design` | 情緒、時序、easing、choreography 與 QA 原則 | 短片標題／字幕動畫與長片章節卡共用 |
 | `video-shotcraft` | Remotion 電影感鏡頭卡、2.5D、轉場與聲音設計 | 產品宣傳片與進階動效 provider |
 | `HyperFrames`／`GSAP`／`Remotion` | 字卡、時間軸、字幕與程式動畫實作規範 | 產生動效工程時由 Agent 路由載入 |
+| `HyperFrames` | HTML／CSS／JS 動態影片、預覽、lint 與本機 MP4 渲染 | `scripts/hyperframes_provider.py` optional provider；支援 `npx hyperframes`，不取代 FFmpeg／PIL／Remotion fallback |
 | `Pixel2Motion` | Logo／品牌開場動畫 | Logo reveal provider |
 | `story-to-handdrawn-video` | 中文故事手繪動畫 | 故事型短片 provider |
 | `LottieFiles motion-design` | 通用 motion design 方法論 | 已安裝至全域 Skill SSOT，並同步保留在 `integrations/motion-design/` |
 | `MoneyPrinterTurbo` | 主題／腳本 → TTS、素材、BGM、成片 | 只作 optional topic-video provider；不取代既有錄影的語意剪輯 |
+| `Pexels`／`Pixabay` | 真實情境 B-roll 素材 | optional；需各自 API／授權，沒有設定時回退 local |
+| `fal.ai` | Marketplace 圖片、文字轉影片與 GPT Image 2 → 圖轉影片 B-roll | `--broll fal-image`／`fal-video`／`fal-image-to-video` 加 `--allow-remote-broll`；缺 key／模型／遠端失敗回退 local |
+| AI 生圖／圖生影片 | OpenAI Images、Gemini／Imagen、FLUX、Runway、Veo、Kling、Luma 等 | optional provider 設計；fal.ai queue adapter 已可用，其餘不作核心硬依賴 |
 
-短片與長片共用語意 JSON、word-level 時間軸與字幕布局；長片使用 `render_full.py`，短片使用 `render_shorts.py`。
+短片與長片共用語意 JSON、word-level 時間軸與字幕布局；長片使用 `render_full.py`，短片使用 `render_shorts.py`。B-roll／模型 provider 的完整擴充矩陣見 `docs/broll-providers.md`；這些都是 optional，不是剪神核心依賴。
+
+HyperFrames 專案可明確選用本機 CLI provider：
+
+```bash
+python3 scripts/hyperframes_provider.py doctor /path/to/hyperframes-project
+python3 scripts/hyperframes_provider.py lint /path/to/hyperframes-project
+python3 scripts/hyperframes_provider.py check /path/to/hyperframes-project
+python3 scripts/hyperframes_provider.py preview /path/to/hyperframes-project
+python3 scripts/hyperframes_provider.py render /path/to/hyperframes-project --output final.mp4
+```
+
+HyperFrames CLI 可在 macOS、Windows、Linux 本機使用；需要跨機器一致輸出時可加 `--docker`。讓 Claude、Cursor、Gemini CLI、Codex 等 coding agents 載入同一套操作規則，可執行 `npx skills add heygen-com/hyperframes --full-depth`。整合邊界見 [`integrations/hyperframes/README.md`](integrations/hyperframes/README.md)。
 
 ### MoneyPrinterTurbo 路由規則
 
@@ -113,8 +129,17 @@ python3 scripts/doctor.py
 | 工具 | 檢查項目 | 缺了怎辦 |
 | :--- | :--- | :--- |
 | **FFmpeg** | `ffmpeg -filters \| grep subtitles` | Mac: `brew install ffmpeg` / Win: `winget install Gyan.FFmpeg` |
-| **Python** | Python 3.10+ & `faster-whisper` | `pip install faster-whisper` |
+| **Python** | Python 3.10+、`faster-whisper`、Pillow（本地／fal B-roll） | `pip install faster-whisper Pillow` |
 | **Node.js** | Node 20+ & Remotion | `npx remotion --version` |
+
+### B-roll Provider 原則
+
+- 有現成錄影時，預設保留原始人聲與剪神本地 B-roll，不自動呼叫外部模型。
+- LLM 只產生受限制的 `scene_plan.json`；素材／圖片／圖生影片 provider 仍須 opt-in。
+- ChatGPT／Codex／Claude Code／Kimi 網頁訂閱通常不能直接代替第三方 API key。
+- API key 不寫入 skill、git 或 log；fal remote 呼叫必須同時有 `FAL_KEY` 與 `--allow-remote-broll`，缺少 key、影片模型或遠端失敗時必須退回本地路線。
+- fal 下載媒體只作無音軌 overlay，原始口白與字幕最後一層不變；manifest 不得記錄 key 或簽名 URL。
+- Provider 類型、設定名稱與目前完成度見 `docs/broll-providers.md`；文字 → 本地動態圖卡／生圖鏡頭動畫／文字生影片與 fal GPT Image 2 → image-to-video 的分層規則見 `docs/text-to-dynamic-broll.md`。
 
 ---
 
@@ -166,6 +191,11 @@ python3 scripts/render_shorts.py semantic_full/semantic_edit.json shorts/short_s
   --source input.mp4 --output-dir shorts/talking_head --speed 1.15 \\
   --animation talking-head --broll local --generate-bgm --generate-sfx \\
   --cta "追蹤剪神" --render
+
+# fal 生圖 B-roll（須由使用者先在本機 .env／環境變數設定 FAL_KEY）
+python3 scripts/render_shorts.py semantic_full/semantic_edit.json shorts/short_segments.json \
+  --source input.mp4 --output-dir shorts/fal --speed 1.15 \
+  --broll fal-image --allow-remote-broll --remote-broll-limit 2 --render
 ```
 
 不確定的詞一律保留。長片預設採保守模式；短影音才使用較積極的節奏清理。短片預設只顯示繁中；`prompts/shorts-review.md` 是短影音片審與 Agent 的固定規則。`--broll local` 會產生不依賴外部 API 的情境圖卡，`--generate-sfx` 會產生本地轉場／打勾／印章音效。若只想檢查字幕，可加 `--subtitle-only`，但那會讓字幕與原始語音不完全一致，不應直接當成最終成片。

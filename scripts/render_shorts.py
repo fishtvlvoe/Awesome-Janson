@@ -12,9 +12,10 @@ import sys
 from pathlib import Path
 
 from render_semantic import escape_filter_path
-from subtitle_layout import ASS_FONT_NAME, resolve_font_path, resolve_fonts_dir, split_text_parts, visual_width, wrap_chinese
+from subtitle_layout import ASS_FONT_NAME, ASCII_TOKEN_RE, mixed_text_tokens, resolve_font_path, resolve_fonts_dir, visual_width, wrap_chinese
 from generate_sfx import write_sfx
 from talking_head_adapter import build_events, render_events
+from storyboard_planner import approved_events
 
 
 PROFILES = {
@@ -69,12 +70,112 @@ def wrap_short_en(text: str, max_chars: int = 42) -> list[str]:
 
 SHORT_MAX_CUE_UNITS = 28
 SHORT_MAX_CUE_SECONDS = 5.4
+SHORT_CAPTION_WIDTH = 940
+SHORT_CAPTION_FONT_SIZE = 76
+SHORT_CAPTION_MIN_FONT_SIZE = 42
+TAIL_PAD_SECONDS = 0.65
 SHORT_TERMINAL_CHARS = set("。！？；：.!?;:")
+
+
+def load_storyboard_events(path: Path, segment_id: int) -> list[dict]:
+	"""只讀取使用者明確核准的分鏡；沒有分鏡時絕不自動插卡。"""
+	payload = json.loads(path.read_text(encoding="utf-8"))
+	if payload.get("mode") != "user-approved-short-storyboard":
+		raise ValueError("--storyboard 不是 user-approved-short-storyboard 格式")
+	for plan in payload.get("segments", []):
+		if int(plan.get("segment_id", -1)) == segment_id:
+			return approved_events(plan)
+	return []
+
+
+def validate_remote_broll_seconds(provider: str, seconds: float) -> float:
+	if not 1.0 <= seconds <= 6.0:
+		raise ValueError("--remote-broll-seconds 必須介於 1 至 6")
+	if provider == "fal-image-to-video" and seconds > 2.0:
+		raise ValueError("--broll fal-image-to-video 的 --remote-broll-seconds 最多 2 秒")
+	return seconds
+SHORT_BREAK_CHARS = SHORT_TERMINAL_CHARS | set("，、,.:")
+SHORT_CLOSING_CHARS = set("」』）】〉》〕〗〙〛\"'”’)]}")
 
 
 def _short_units(text: str) -> int:
 	text = clean_text(text)
-	return max(1, math.ceil(visual_width(text, 76) / 76)) if text else 0
+	return max(1, math.ceil(visual_width(text, SHORT_CAPTION_FONT_SIZE) / SHORT_CAPTION_FONT_SIZE)) if text else 0
+
+
+def _caption_break_positions(text: str) -> list[int]:
+	"""只回傳自然標點與其後閉合符號的位置；URL、版本號等 ASCII token 不能成為切點。"""
+	positions: list[int] = []
+	tokens = mixed_text_tokens(text)
+	cursor = 0
+	for index, token in enumerate(tokens):
+		cursor += len(token)
+		if len(token) != 1 or token not in SHORT_BREAK_CHARS:
+			continue
+		break_end = cursor
+		for trailing in tokens[index + 1 :]:
+			if len(trailing) != 1 or trailing not in SHORT_CLOSING_CHARS:
+				break
+			break_end += len(trailing)
+		positions.append(break_end)
+	return positions
+
+
+def _ellipsis_within_caption_width(text: str, font_size: int) -> str:
+	"""在固定可讀字級內縮略顯示文字；原始 cue 保留給審稿與後續輸出。"""
+	if visual_width(text, font_size) <= SHORT_CAPTION_WIDTH:
+		return text
+	suffix = "…"
+	visible = ""
+	for char in text:
+		if visual_width(visible + char + suffix, font_size) > SHORT_CAPTION_WIDTH:
+			break
+		visible += char
+	return (visible.rstrip() + suffix) if visible.strip() else suffix
+
+
+def _complete_caption_layout(text: str) -> tuple[list[str], int] | None:
+	"""回傳不截字的可讀排版；無法安全排版時回傳 ``None``。"""
+	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_MIN_FONT_SIZE - 1, -2):
+		if visual_width(text, font_size) <= SHORT_CAPTION_WIDTH:
+			return [text], font_size
+	breaks = _caption_break_positions(text)
+	for font_size in range(SHORT_CAPTION_FONT_SIZE, SHORT_CAPTION_MIN_FONT_SIZE - 1, -2):
+		for split_at in sorted(breaks, key=lambda value: abs(value - len(text) / 2)):
+			left, right = text[:split_at].strip(), text[split_at:].strip()
+			if left and right and visual_width(left, font_size) <= SHORT_CAPTION_WIDTH and visual_width(right, font_size) <= SHORT_CAPTION_WIDTH:
+				return [left, right], font_size
+	return None
+
+
+def _oversized_ascii_token(text: str, font_size: int) -> str | None:
+	for token in mixed_text_tokens(text):
+		if ASCII_TOKEN_RE.fullmatch(token) and visual_width(token, font_size) > SHORT_CAPTION_WIDTH:
+			return token
+	return None
+
+
+def _safe_caption_display(token: str, font_size: int) -> str:
+	"""只有獨立存在、無法逐字呈現的超長 ASCII token 才可於顯示層縮略。"""
+	return _ellipsis_within_caption_width(token, font_size)
+
+
+def fit_short_caption_lines(text: str) -> tuple[list[str], int]:
+	"""優先單行縮小；真的要換行時，只在不屬於 ASCII token 的標點後切。"""
+	text = clean_text(text)
+	if not text:
+		return [""], SHORT_CAPTION_FONT_SIZE
+	layout = _complete_caption_layout(text)
+	if layout is not None:
+		return layout
+	# 網址／版本號等單一 ASCII token 不可安全斷行，才允許顯示層以省略號保留前綴。
+	oversized_token = _oversized_ascii_token(text, SHORT_CAPTION_MIN_FONT_SIZE)
+	if oversized_token:
+		before, after = text.split(oversized_token, 1)
+		if not re.search(r"[\u3400-\u9fffA-Za-z0-9]", before + after):
+			return [_safe_caption_display(oversized_token, SHORT_CAPTION_MIN_FONT_SIZE)], SHORT_CAPTION_MIN_FONT_SIZE
+	# 中文口語內容不能默默截字或在詞中斷行，交回語意階段人工切分。
+	raise ValueError("短字幕無安全標點且超過可讀範圍，請在語意編輯階段分句")
 
 
 def _punctuation_only(text: str) -> bool:
@@ -174,14 +275,41 @@ def merge_short_cues(edit: dict, source_start: float, source_end: float) -> list
 	return smoothed
 
 
+def _coalesce_safe_chunks(chunks: list[str]) -> list[str]:
+	"""把相鄰短子句併回可讀的最多兩行字幕，避免 0.x 秒快閃。"""
+	result: list[str] = []
+	current = ""
+	for chunk in chunks:
+		candidate = _join_short_zh(current, chunk)
+		if current and _complete_caption_layout(candidate) is None:
+			result.append(current)
+			current = chunk
+		else:
+			current = candidate
+	if current:
+		result.append(current)
+	return result
+
+
 def split_short_text(text: str) -> list[str]:
+	"""只在安全標點後拆 cue；無安全切點時交由字幕檢查要求語意重切。"""
 	text = clean_text(text)
-	if len(wrap_short_zh(text, 76)) <= 2:
+	if not text or _complete_caption_layout(text) is not None:
 		return [text]
-	# 先把可能超過兩行的長 cue 拆成兩個有時間碼的完整片段。
-	parts = max(2, math.ceil(_short_units(text) / 18))
-	chunks = split_text_parts(text, parts, english=False)
-	return chunks or [text]
+	positions = _caption_break_positions(text)
+	if not positions:
+		return [text]
+	chunks: list[str] = []
+	cursor = 0
+	for position in positions:
+		chunk = text[cursor:position].strip()
+		if chunk:
+			chunks.append(chunk)
+		cursor = position
+	tail = text[cursor:].strip()
+	if tail:
+		chunks.append(tail)
+	return _coalesce_safe_chunks(chunks) or [text]
 
 
 def split_caption(cue: dict, segment_start: float, cue_start: float, cue_end: float, speed: float) -> list[dict]:
@@ -232,8 +360,8 @@ def write_ass(
 		"",
 		"[V4+ Styles]",
 		"Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-		f"Style: Caption,{font_name},76,&H00FFFFFF,&H00FFFFFF,{profile['outline']},{profile['back']},-1,0,0,0,100,100,0,0,3,5,3,2,42,42,260,1",
-		f"Style: Emph,{font_name},96,&H00FFFFFF,{profile['accent']},{profile['outline']},{profile['back']},-1,0,0,0,100,100,0,0,3,6,4,2,34,34,270,1",
+		f"Style: Caption,{font_name},76,&H00FFFFFF,&H00FFFFFF,{profile['outline']},{profile['back']},-1,0,0,0,100,100,0,0,1,5,3,2,42,42,260,1",
+		f"Style: Emph,{font_name},76,&H00FFFFFF,{profile['accent']},{profile['outline']},{profile['back']},-1,0,0,0,100,100,0,0,1,5,3,2,34,34,270,1",
 		f"Style: Title,{font_name},68,{profile['accent']},&H00FFFFFF,{profile['outline']},{profile['back']},-1,0,0,0,100,100,2,0,3,4,3,8,48,48,120,1",
 		f"Style: CTA,{font_name},58,&H00FFFFFF,&H00FFFFFF,{profile['outline']},{profile['back']},-1,0,0,0,100,100,0,0,3,5,3,8,48,48,360,1",
 		"",
@@ -255,18 +383,12 @@ def write_ass(
 		)
 	for index, caption in enumerate(captions):
 		zh_raw = clean_text(caption["zh"])
-		# 短句用 96 級強調，長句改用 76 級並自動換成最多兩行，避免直式畫面被裁切。
+		# 字幕維持同一套基準大小；只有太長時縮小，換行只發生在標點之後。
 		style = "Emph" if index == 0 or _short_units(zh_raw) <= 14 else "Caption"
-		font_size = 96 if style == "Emph" else 76
-		zh_lines = wrap_short_zh(zh_raw, font_size)
-		if len(zh_lines) > 2:
-			style = "Caption"
-			font_size = 76
-			zh_lines = wrap_short_zh(zh_raw, font_size)
+		zh_lines, font_size = fit_short_caption_lines(zh_raw)
 		zh = r"\N".join(escape_ass(line) for line in zh_lines[:2])
 		en = escape_ass(caption.get("en", ""))
-		# 從 88% 放大到 100%，讓每個新 cue 都有輕微進場節奏，而不是靜止文字。
-		text = f"{{\\fscx88\\fscy88\\t(0,180,\\fscx100\\fscy100)}}{zh}"
+		text = f"{{\\fs{font_size}\\fad(60,60)}}{zh}"
 		if en:
 			text += f"\\N{{\\fs38\\c&H00D9D9D9&}}{en}"
 		lines.append(
@@ -330,16 +452,28 @@ def render_segment(
 			f"enable='between(t,{start_time:.3f},{end_time:.3f})'[{out_label}]"
 		)
 		last_video = out_label
-	# 動畫先蓋在原片上，字幕最後疊回來，避免 B-roll／卡片把字遮掉。
-	filters.append(f"[{last_video}]subtitles=filename='{ass_file}':fontsdir='{fonts_dir_value}'[v]")
+	# 尾端先複製最後一幀／補靜音，再淡出；不讓淡出吃掉最後一句口白。
+	content_duration = max(0.1, duration / speed)
+	rendered_duration = content_duration + TAIL_PAD_SECONDS
+	filters.append(
+		f"[{last_video}]tpad=stop_mode=clone:stop_duration={TAIL_PAD_SECONDS:.3f},"
+		f"subtitles=filename='{ass_file}':fontsdir='{fonts_dir_value}',"
+		f"fade=t=out:st={max(0.0, rendered_duration - 0.45):.3f}:d=0.45[v]"
+	)
 
 	map_audio = "0:a:0?"
-	audio_args: list[str] = ["-af", atempo_filter(speed)]
+	audio_args: list[str] = [
+		"-af",
+		f"{atempo_filter(speed)},apad=pad_dur={TAIL_PAD_SECONDS:.3f},"
+		f"afade=t=out:st={max(0.0, rendered_duration - 0.55):.3f}:d=0.55",
+	]
 	if bgm or sfx:
-		music_end = max(0.1, duration / speed)
+		music_end = rendered_duration
 		mix_labels = []
 		# 混入 BGM／SFX 時保留人聲頭部空間，避免總音量突然爆高。
-		filters.append(f"[0:a:0]aresample=48000,{atempo_filter(speed)},volume=0.5[voice]")
+		filters.append(
+			f"[0:a:0]aresample=48000,{atempo_filter(speed)},apad=pad_dur={TAIL_PAD_SECONDS:.3f},volume=0.5[voice]"
+		)
 		mix_labels.append("[voice]")
 		next_audio_index = 1 + len(animation_events or [])
 		if bgm:
@@ -359,7 +493,7 @@ def render_segment(
 		filters.append(
 			"".join(mix_labels)
 			+ f"amix=inputs={len(mix_labels)}:duration=first:dropout_transition=2:normalize=0,"
-			"alimiter=limit=0.94[a]"
+			f"alimiter=limit=0.94,afade=t=out:st={max(0.0, music_end - 0.55):.3f}:d=0.55[a]"
 		)
 		map_audio = "[a]"
 		audio_args = []
@@ -369,7 +503,7 @@ def render_segment(
 		*input_args,
 		"-filter_complex", ";".join(filters), "-map", "[v]", "-map", map_audio,
 		*audio_args,
-		"-t", f"{duration / speed:.3f}",
+		"-t", f"{rendered_duration:.3f}",
 		"-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p", "-r", "30",
 		"-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-shortest", "-movflags", "+faststart", str(output),
 	]
@@ -385,7 +519,23 @@ def main() -> None:
 	parser.add_argument("--speed", type=float, default=1.15)
 	parser.add_argument("--style", choices=sorted(PROFILES), default="editorial")
 	parser.add_argument("--animation", choices=("none", "talking-head"), default="none")
-	parser.add_argument("--broll", choices=("none", "local"), default="none", help="local Image2-style context cards")
+	parser.add_argument("--storyboard", type=Path, help="先由 build_short_storyboard.py 產出、再由使用者核准的分鏡 JSON")
+	parser.add_argument("--auto-visual-beats", action="store_true", help="明確啟用舊有自動視覺節拍；預設關閉，改由 --storyboard 決定")
+	parser.add_argument("--visual-cadence", type=float, default=2.0, help="僅 --auto-visual-beats 使用的節拍秒數（1.5-4，預設 2）")
+	parser.add_argument(
+		"--broll",
+		choices=("none", "local", "fal-image", "fal-video", "fal-image-to-video"),
+		default="none",
+		help="local cards, or explicit fal.ai image/video/image-to-video B-roll with local fallback",
+	)
+	parser.add_argument("--allow-remote-broll", action="store_true", help="explicitly allow paid remote fal.ai generation")
+	parser.add_argument("--fal-image-model", help="optional fal image endpoint ID; defaults to fal-ai/flux/schnell")
+	parser.add_argument("--fal-video-model", help="required fal video endpoint ID, for example a /text-to-video or /image-to-video endpoint")
+	parser.add_argument("--fal-env-file", type=Path, help="optional dotenv file containing only local fal settings")
+	parser.add_argument("--fal-timeout", type=int, help="per-request fal queue timeout in seconds (10-600)")
+	parser.add_argument("--remote-broll-limit", type=int, default=2, help="maximum remote B-roll events per short (default: 2)")
+	parser.add_argument("--remote-broll-seconds", type=float, default=2.0, help="visible seconds per fal image-to-video event (1-6; default: 2)")
+	parser.add_argument("--reuse-broll-media", type=Path, action="append", default=[], help="已核准的本機 B-roll；優先使用且不觸發遠端生成，可重複指定")
 	parser.add_argument("--bgm", type=Path, help="optional local BGM file")
 	parser.add_argument("--generate-bgm", action="store_true", help="generate a local synthetic BGM")
 	parser.add_argument("--generate-sfx", action="store_true", help="generate local transition/checklist/stamp sound effects")
@@ -397,8 +547,19 @@ def main() -> None:
 		raise SystemExit("--speed 必須大於 0")
 	if args.limit < 0:
 		raise SystemExit("--limit 不可小於 0")
+	if args.remote_broll_limit < 0:
+		raise SystemExit("--remote-broll-limit 不可小於 0")
+	if not 1.5 <= args.visual_cadence <= 4.0:
+		raise SystemExit("--visual-cadence 必須介於 1.5 至 4 秒")
+	try:
+		args.remote_broll_seconds = validate_remote_broll_seconds(args.broll, args.remote_broll_seconds)
+	except ValueError as exc:
+		raise SystemExit(str(exc)) from exc
 	if args.bgm and args.generate_bgm:
 		raise SystemExit("--bgm 與 --generate-bgm 不可同時使用")
+	for media in args.reuse_broll_media:
+		if not media.is_file():
+			raise SystemExit(f"--reuse-broll-media 不存在：{media}")
 	edit = json.loads(args.edit.read_text(encoding="utf-8"))
 	segment_payload = json.loads(args.segments.read_text(encoding="utf-8"))
 	args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -415,6 +576,37 @@ def main() -> None:
 			], check=True)
 	if bgm_path and not bgm_path.is_file():
 		raise SystemExit(f"BGM 不存在：{bgm_path}")
+	fal_config = None
+	fal_fallback_reason = None
+	if args.broll in {"fal-image", "fal-video", "fal-image-to-video"}:
+		try:
+			from fal_broll_provider import FalBrollError, resolve_fal_config, resolve_fal_image_to_video_config
+		except ImportError:
+			# 未安裝 Pillow 等選用渲染依賴時不影響非 fal 的既有短片流程。
+			fal_fallback_reason = "fal-render-dependency-unavailable"
+		else:
+			try:
+				if args.broll == "fal-image-to-video":
+					fal_config = resolve_fal_image_to_video_config(
+						allow_remote=args.allow_remote_broll,
+						image_model=args.fal_image_model,
+						video_model=args.fal_video_model,
+						timeout_seconds=args.fal_timeout,
+						env_file=args.fal_env_file,
+					)
+				else:
+					fal_config = resolve_fal_config(
+						"image" if args.broll == "fal-image" else "video",
+						allow_remote=args.allow_remote_broll,
+						image_model=args.fal_image_model,
+						video_model=args.fal_video_model,
+						timeout_seconds=args.fal_timeout,
+						env_file=args.fal_env_file,
+					)
+			except FalBrollError as exc:
+				fal_fallback_reason = exc.reason
+		if fal_fallback_reason:
+			print(f"⚠️ fal B-roll 未啟用，改用 local：{fal_fallback_reason}")
 	outputs: list[dict] = []
 	segments = segment_payload.get("segments", [])
 	if args.limit:
@@ -435,14 +627,34 @@ def main() -> None:
 			output_duration,
 			args.cta,
 		)
-		use_talking_head = args.animation == "talking-head" or args.broll == "local"
-		animation_events = (
-			build_events(captions, output_duration, include_broll=args.broll == "local")
-			if use_talking_head
+		use_talking_head = args.animation == "talking-head" or args.broll != "none"
+		if args.storyboard:
+			animation_events = load_storyboard_events(args.storyboard, int(segment["id"]))
+		elif args.auto_visual_beats and use_talking_head:
+			animation_events = build_events(
+				captions,
+				output_duration,
+				include_broll=args.broll != "none",
+				broll_duration=args.remote_broll_seconds if args.broll == "fal-image-to-video" else None,
+				cadence_seconds=args.visual_cadence,
+			)
+		else:
+			animation_events = []
+		animation_dir = args.output_dir / f".talking-head-{int(segment['id']):02d}"
+		rendered_events = (
+			render_events(
+				animation_events,
+				animation_dir,
+				broll_provider=args.broll if args.broll in {"fal-image", "fal-video", "fal-image-to-video"} else "local",
+				fal_config=fal_config,
+				fal_cache_dir=args.output_dir / ".fal-cache",
+				remote_broll_limit=args.remote_broll_limit,
+				fallback_reason=fal_fallback_reason,
+				reusable_broll_media=[media.resolve() for media in args.reuse_broll_media],
+			)
+			if args.render and animation_events
 			else []
 		)
-		animation_dir = args.output_dir / f".talking-head-{int(segment['id']):02d}"
-		rendered_events = render_events(animation_events, animation_dir) if args.render and animation_events else []
 		sfx_path = None
 		if args.generate_sfx and args.render and rendered_events:
 			sfx_path = args.output_dir / f"short_{int(segment['id']):02d}_sfx.wav"
@@ -452,12 +664,14 @@ def main() -> None:
 			"speed": args.speed,
 			"style": args.style,
 			"animation": args.animation,
+			"storyboard_mode": "user-approved" if args.storyboard else ("automatic" if args.auto_visual_beats else "none"),
 			"broll": args.broll,
 			"animation_events": [{k: v for k, v in event.items() if k != "frames"} for event in rendered_events],
 			"bgm": str(bgm_path) if bgm_path else None,
 			"sfx": str(sfx_path) if sfx_path else None,
 			"cta": args.cta,
-			"duration": round(output_duration, 3),
+			"content_duration": round(output_duration, 3),
+			"duration": round(output_duration + TAIL_PAD_SECONDS, 3),
 			"ass": str(ass),
 			"output": str(output),
 			"caption_count": len(captions),
@@ -482,10 +696,21 @@ def main() -> None:
 	manifest = {
 		"schema_version": 1,
 		"tool": "awesome-janson",
-		"mode": "shorts-master+talking-head-video-cut-local",
+		"mode": "shorts-master+talking-head-video-cut",
 		"style": args.style,
 		"animation": args.animation,
+		"storyboard": {"mode": "user-approved" if args.storyboard else ("automatic" if args.auto_visual_beats else "none")},
 		"broll": args.broll,
+		"fal": {
+			"remote_opt_in": bool(args.allow_remote_broll),
+			"model": fal_config.model if fal_config and hasattr(fal_config, "model") else None,
+			"image_model": getattr(getattr(fal_config, "image", None), "model", None),
+			"video_model": getattr(getattr(fal_config, "video", None), "model", None),
+			"fallback_reason": fal_fallback_reason,
+			"remote_broll_limit": args.remote_broll_limit,
+			"remote_broll_seconds": args.remote_broll_seconds if args.broll == "fal-image-to-video" else None,
+			"reused_media_count": len(args.reuse_broll_media),
+		},
 		"speed": args.speed,
 		"bgm": str(bgm_path) if bgm_path else None,
 		"sfx": bool(args.generate_sfx),

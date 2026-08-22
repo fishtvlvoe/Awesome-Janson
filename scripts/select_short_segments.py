@@ -18,6 +18,68 @@ def load_chapters(path: Path | None, source_end: float) -> list[dict]:
 	return [{"id": 1, "source_start": 0.0, "title": "精華片段"}, {"id": 2, "source_start": source_end / 2, "title": "精華片段"}]
 
 
+NATURAL_END_CHARS = set("。！？；.!?;")
+TRAILING_CLOSING_CHARS = "」』）】〉》〕〗〙〛\"'”’)]}"
+MAX_NATURAL_END_GAP_SECONDS = 0.9
+EPSILON = 0.001
+
+
+def extend_to_natural_end(
+	chapter_cues: list[dict],
+	start: float,
+	end: float,
+	maximum: float,
+	limit_end: float | None = None,
+) -> float:
+	"""只在 cue 邊界收尾；逗號／冒號結尾會延伸到下一個完整句。"""
+	ordered = sorted(chapter_cues, key=lambda cue: float(cue.get("source_start", 0.0)))
+	allowed_end = min(start + maximum, limit_end) if limit_end is not None else start + maximum
+	# 先將選段對齊到完整 cue。無法向前延伸時退回上一個 cue 邊界，不能切在說話中間。
+	current_index = next(
+		(index for index, cue in enumerate(ordered) if float(cue.get("source_start", 0.0)) < end - EPSILON <= float(cue.get("source_end", 0.0)) + EPSILON),
+		None,
+	)
+	if current_index is None:
+		# 目標點落在 ASR cue 間隙時，先回到前一個完整 cue，再依短暫停頓規則決定是否延伸。
+		previous_indexes = [
+			index
+			for index, cue in enumerate(ordered)
+			if float(cue.get("source_end", 0.0)) <= end + EPSILON
+		]
+		if not previous_indexes:
+			return end
+		current_index = previous_indexes[-1]
+		end = float(ordered[current_index].get("source_end", end))
+	current_end = float(ordered[current_index].get("source_end", end))
+	if current_end > end + EPSILON:
+		if current_end <= allowed_end + EPSILON:
+			end = current_end
+		else:
+			previous_end = max(
+				(float(cue.get("source_end", start)) for cue in ordered[:current_index] if float(cue.get("source_end", start)) <= end + EPSILON),
+				default=start,
+			)
+			return previous_end
+	while current_index < len(ordered) - 1:
+		current_cue = ordered[current_index]
+		tail = clean_text(current_cue.get("zh"))
+		terminal_tail = tail.rstrip(TRAILING_CLOSING_CHARS)
+		if terminal_tail and terminal_tail[-1] in NATURAL_END_CHARS:
+			break
+		next_cue = ordered[current_index + 1]
+		current_end = float(current_cue.get("source_end", end))
+		next_start = float(next_cue.get("source_start", current_end))
+		# 不為補完整句保留長段靜音；短暫停頓仍可自然銜接。
+		if next_start - current_end > MAX_NATURAL_END_GAP_SECONDS + EPSILON:
+			break
+		next_end = float(next_cue.get("source_end", end))
+		if next_end > allowed_end + EPSILON:
+			break
+		end = next_end
+		current_index += 1
+	return end
+
+
 def score_window(cues: list[dict], start: float, end: float) -> tuple[float, list[dict]]:
 	inside = [
 		cue
@@ -58,6 +120,7 @@ def build_candidates(edit: dict, chapters: list[dict], minimum: float, maximum: 
 				end = min(chapter_end, start + minimum)
 			if end - start > maximum:
 				end = start + maximum
+			end = extend_to_natural_end(chapter_cues, start, end, maximum, limit_end=chapter_end)
 			if end - start < minimum:
 				continue
 			score, inside = score_window(cues, start, end)
